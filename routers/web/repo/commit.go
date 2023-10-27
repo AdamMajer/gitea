@@ -294,7 +294,7 @@ func Diff(ctx *context.Context) {
 		}
 		return
 	}
-	if len(commitID) != git.SHAFullLength {
+	if len(commitID) != gitRepo.Hash.FullLength() {
 		commitID = commit.ID.String()
 	}
 

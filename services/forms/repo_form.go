@@ -53,6 +53,7 @@ type CreateRepoForm struct {
 	TrustModel      string
 
 	ForkSingleBranch string
+	HashType         string
 }
 
 // Validate validates the fields

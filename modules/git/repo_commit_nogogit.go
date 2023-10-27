@@ -65,7 +65,7 @@ func (repo *Repository) IsCommitExist(name string) bool {
 	return err == nil
 }
 
-func (repo *Repository) getCommit(id SHA1) (*Commit, error) {
+func (repo *Repository) getCommit(id Hash) (*Commit, error) {
 	wr, rd, cancel := repo.CatFileBatch(repo.Ctx)
 	defer cancel()
 
@@ -74,7 +74,7 @@ func (repo *Repository) getCommit(id SHA1) (*Commit, error) {
 	return repo.getCommitFromBatchReader(rd, id)
 }
 
-func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id SHA1) (*Commit, error) {
+func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id Hash) (*Commit, error) {
 	_, typ, size, err := ReadBatchLine(rd)
 	if err != nil {
 		if errors.Is(err, io.EOF) || IsErrNotExist(err) {
@@ -97,7 +97,7 @@ func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id SHA1) (*Co
 		if err != nil {
 			return nil, err
 		}
-		tag, err := parseTagData(data)
+		tag, err := parseTagData(id.Type(), data)
 		if err != nil {
 			return nil, err
 		}
@@ -131,12 +131,13 @@ func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id SHA1) (*Co
 	}
 }
 
-// ConvertToSHA1 returns a Hash object from a potential ID string
-func (repo *Repository) ConvertToSHA1(commitID string) (SHA1, error) {
-	if len(commitID) == SHAFullLength && IsValidSHAPattern(commitID) {
-		sha1, err := NewIDFromString(commitID)
+// ConvertToGitHash returns a GitHash object from a potential ID string
+func (repo *Repository) ConvertToGitHash(commitID string) (Hash, error) {
+	hash := repo.Hash
+	if len(commitID) == hash.FullLength() && hash.IsValid(commitID) {
+		hash, err := repo.Hash.NewIDFromString(commitID)
 		if err == nil {
-			return sha1, nil
+			return hash, nil
 		}
 	}
 
@@ -144,15 +145,15 @@ func (repo *Repository) ConvertToSHA1(commitID string) (SHA1, error) {
 	defer cancel()
 	_, err := wr.Write([]byte(commitID + "\n"))
 	if err != nil {
-		return SHA1{}, err
+		return nil, err
 	}
 	sha, _, _, err := ReadBatchLine(rd)
 	if err != nil {
 		if IsErrNotExist(err) {
-			return SHA1{}, ErrNotExist{commitID, ""}
+			return nil, ErrNotExist{commitID, ""}
 		}
-		return SHA1{}, err
+		return nil, err
 	}
 
-	return MustIDFromString(string(sha)), nil
+	return repo.Hash.MustIDFromString(string(sha)), nil
 }

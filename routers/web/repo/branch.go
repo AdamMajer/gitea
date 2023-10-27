@@ -147,11 +147,18 @@ func RestoreBranchPost(ctx *context.Context) {
 		return
 	}
 
+	hash, err := git.GetHashTypeOfRepo(ctx, ctx.Repo.Repository.RepoPath())
+	if err != nil {
+		log.Error("RestoreBranch: CreateBranch: %v", err)
+		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", deletedBranch.Name))
+		return
+	}
+
 	// Don't return error below this
 	if err := repo_service.PushUpdate(
 		&repo_module.PushUpdateOptions{
 			RefFullName:  git.RefNameFromBranch(deletedBranch.Name),
-			OldCommitID:  git.EmptySHA,
+			OldCommitID:  hash.Empty().String(),
 			NewCommitID:  deletedBranch.CommitID,
 			PusherID:     ctx.Doer.ID,
 			PusherName:   ctx.Doer.Name,
