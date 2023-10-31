@@ -41,7 +41,6 @@ type HashType interface {
 
 	IsValid(input string) bool
 	MustID(b []byte) Hash
-	NewID(b []byte) (Hash, error)
 
 	NewHasher() HasherInterface
 }
@@ -79,10 +78,6 @@ func (Sha1HashType) MustID(b []byte) Hash {
 	var id Sha1Hash
 	copy(id[0:20], b)
 	return &id
-}
-
-func (h Sha1HashType) NewID(b []byte) (Hash, error) {
-	return hashFromRaw(h, b)
 }
 
 func (Sha1HashType) NewEmpty() Hash {
@@ -132,10 +127,6 @@ func (Sha256HashType) MustID(b []byte) Hash {
 	return &id
 }
 
-func (h Sha256HashType) NewID(b []byte) (Hash, error) {
-	return hashFromRaw(h, b)
-}
-
 func (Sha256HashType) NewEmpty() Hash {
 	return NewSha256()
 }
@@ -165,7 +156,7 @@ func NewHash(hash string) (Hash, error) {
 	return nil, errors.New("unsupported hash type")
 }
 
-func hashFromRaw(h HashType, b []byte) (Hash, error) {
+func NewID(h HashType, b []byte) (Hash, error) {
 	if len(b) != h.FullLength()/2 {
 		return EmptyHash(h), fmt.Errorf("length must be %d: %v", h.FullLength(), b)
 	}
@@ -186,7 +177,7 @@ func NewIDFromString(ht HashType, s string) (Hash, error) {
 	if err != nil {
 		return EmptyHash(ht), err
 	}
-	return ht.NewID(b)
+	return NewID(ht, b)
 }
 
 func HashTypeFromString(hash string) (HashType, error) {
