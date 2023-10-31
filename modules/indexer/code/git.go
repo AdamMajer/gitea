@@ -62,8 +62,8 @@ func isIndexable(entry *git.TreeEntry) bool {
 }
 
 // parseGitLsTreeOutput parses the output of a `git ls-tree -r --full-name` command
-func parseGitLsTreeOutput(stdout []byte) ([]internal.FileUpdate, error) {
-	entries, err := git.ParseTreeEntries(stdout)
+func parseGitLsTreeOutput(hash git.HashType, stdout []byte) ([]internal.FileUpdate, error) {
+	entries, err := git.ParseTreeEntries(hash, stdout)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,11 @@ func genesisChanges(ctx context.Context, repo *repo_model.Repository, revision s
 	}
 
 	var err error
-	changes.Updates, err = parseGitLsTreeOutput(stdout)
+	hash, err := git.GetHashTypeOfRepo(ctx, repo.RepoPath())
+	if err != nil {
+		return nil, err
+	}
+	changes.Updates, err = parseGitLsTreeOutput(hash, stdout)
 	return &changes, err
 }
 
@@ -169,6 +173,11 @@ func nonGenesisChanges(ctx context.Context, repo *repo_model.Repository, revisio
 	if err != nil {
 		return nil, err
 	}
-	changes.Updates, err = parseGitLsTreeOutput(lsTreeStdout)
+
+	hash, err := git.GetHashTypeOfRepo(ctx, repo.RepoPath())
+	if err != nil {
+		return nil, err
+	}
+	changes.Updates, err = parseGitLsTreeOutput(hash, lsTreeStdout)
 	return &changes, err
 }

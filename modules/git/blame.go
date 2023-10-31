@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/util"
@@ -30,13 +29,12 @@ type BlameReader struct {
 	done           chan error
 	lastSha        *string
 	ignoreRevsFile *string
+	hash           HashType
 }
 
 func (r *BlameReader) UsesIgnoreRevs() bool {
 	return r.ignoreRevsFile != nil
 }
-
-var shaLineRegex = regexp.MustCompile("^([a-z0-9]{40})")
 
 // NextPart returns next part of blame (sequential code lines with the same commit)
 func (r *BlameReader) NextPart() (*BlamePart, error) {
@@ -61,16 +59,19 @@ func (r *BlameReader) NextPart() (*BlamePart, error) {
 			continue
 		}
 
-		lines := shaLineRegex.FindSubmatch(line)
-		if lines != nil {
-			sha1 := string(lines[1])
+		var hash string
+		hashLen := r.hash.FullLength()
 
+		if len(line) > hashLen && line[hashLen] == ' ' && r.hash.IsValid(string(line[0:hashLen])) {
+			hash = string(line[0:hashLen])
+		}
+		if len(hash) > 0 {
 			if blamePart == nil {
-				blamePart = &BlamePart{sha1, make([]string, 0)}
+				blamePart = &BlamePart{hash, make([]string, 0)}
 			}
 
-			if blamePart.Sha != sha1 {
-				r.lastSha = &sha1
+			if blamePart.Sha != hash {
+				r.lastSha = &hash
 				// need to munch to end of line...
 				for isPrefix {
 					_, isPrefix, err = r.bufferedReader.ReadLine()
@@ -113,7 +114,7 @@ func (r *BlameReader) Close() error {
 }
 
 // CreateBlameReader creates reader for given repository, commit and file
-func CreateBlameReader(ctx context.Context, repoPath string, commit *Commit, file string, bypassBlameIgnore bool) (*BlameReader, error) {
+func CreateBlameReader(ctx context.Context, hash HashType, repoPath string, commit *Commit, file string, bypassBlameIgnore bool) (*BlameReader, error) {
 	var ignoreRevsFile *string
 	if CheckGitVersionAtLeast("2.23") == nil && !bypassBlameIgnore {
 		ignoreRevsFile = tryCreateBlameIgnoreRevsFile(commit)
@@ -162,6 +163,7 @@ func CreateBlameReader(ctx context.Context, repoPath string, commit *Commit, fil
 		bufferedReader: bufferedReader,
 		done:           done,
 		ignoreRevsFile: ignoreRevsFile,
+		hash:           hash,
 	}, nil
 }
 

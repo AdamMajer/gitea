@@ -158,9 +158,13 @@ func HookPostReceive(ctx *gitea_context.PrivateContext) {
 			continue
 		}
 
-		// If we've pushed a branch (and not deleted it)
-		if newCommitID != git.EmptySHA && refFullName.IsBranch() {
+		hash, err := git.HashFromString(newCommitID)
+		if err != nil {
+			hash = &git.Sha1Hash{}
+		}
 
+		// If we've pushed a branch (and not deleted it)
+		if newCommitID != hash.Type().Empty().String() && refFullName.IsBranch() {
 			// First ensure we have the repository loaded, we're allowed pulls requests and we can get the base repo
 			if repo == nil {
 				repo = loadRepository(ctx, ownerName, repoName)

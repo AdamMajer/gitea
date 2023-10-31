@@ -221,7 +221,7 @@ func getMergeCommit(ctx context.Context, pr *issues_model.PullRequest) (*git.Com
 		RunStdString(&git.RunOpts{Dir: pr.BaseRepo.RepoPath()})
 	if err != nil {
 		return nil, fmt.Errorf("git rev-list --ancestry-path --merges --reverse: %w", err)
-	} else if len(mergeCommit) < git.SHAFullLength {
+	} else if _, err := git.HashFromString(mergeCommit); err == nil {
 		// PR was maybe fast-forwarded, so just use last commit of PR
 		mergeCommit = prHeadCommitID
 	}

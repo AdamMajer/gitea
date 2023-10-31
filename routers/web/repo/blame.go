@@ -131,7 +131,12 @@ type blameResult struct {
 }
 
 func performBlame(ctx *context.Context, repoPath string, commit *git.Commit, file string, bypassBlameIgnore bool) (*blameResult, error) {
-	blameReader, err := git.CreateBlameReader(ctx, repoPath, commit, file, bypassBlameIgnore)
+	hash, err := ctx.Repo.GitRepo.HashTypeInterface()
+	if err != nil {
+		ctx.NotFound("CreateBlameReader", err)
+		return nil, err
+	}
+	blameReader, err := git.CreateBlameReader(ctx, hash, repoPath, commit, file, bypassBlameIgnore)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +152,7 @@ func performBlame(ctx *context.Context, repoPath string, commit *git.Commit, fil
 		if len(r.Parts) == 0 && r.UsesIgnoreRevs {
 			// try again without ignored revs
 
-			blameReader, err = git.CreateBlameReader(ctx, repoPath, commit, file, true)
+			blameReader, err = git.CreateBlameReader(ctx, hash, repoPath, commit, file, true)
 			if err != nil {
 				return nil, err
 			}

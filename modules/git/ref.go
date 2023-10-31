@@ -44,7 +44,7 @@ func SanitizeRefPattern(name string) string {
 type Reference struct {
 	Name   string
 	repo   *Repository
-	Object SHA1 // The id of this commit object
+	Object Hash // The id of this commit object
 	Type   string
 }
 
@@ -205,7 +205,7 @@ func RefURL(repoURL, ref string) string {
 		return repoURL + "/src/branch/" + refName
 	case refFullName.IsTag():
 		return repoURL + "/src/tag/" + refName
-	case !IsValidSHAPattern(ref):
+	case !HashTypeFromID(Sha1).IsValid(ref):
 		// assume they mean a branch
 		return repoURL + "/src/branch/" + refName
 	default:

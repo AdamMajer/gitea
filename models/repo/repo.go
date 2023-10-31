@@ -17,6 +17,7 @@ import (
 	"code.gitea.io/gitea/models/unit"
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/base"
+	"code.gitea.io/gitea/modules/git"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/markup"
 	"code.gitea.io/gitea/modules/setting"
@@ -179,6 +180,7 @@ type Repository struct {
 	IsFsckEnabled                   bool               `xorm:"NOT NULL DEFAULT true"`
 	CloseIssuesViaCommitInAnyBranch bool               `xorm:"NOT NULL DEFAULT false"`
 	Topics                          []string           `xorm:"TEXT JSON"`
+	HashType                        string             `xorm:"VARCHAR(6) NOT NULL DEFAULT 'sha1'"`
 
 	TrustModel TrustModelType
 
@@ -313,7 +315,8 @@ func (repo *Repository) HTMLURL() string {
 // CommitLink make link to by commit full ID
 // note: won't check whether it's an right id
 func (repo *Repository) CommitLink(commitID string) (result string) {
-	if commitID == "" || commitID == "0000000000000000000000000000000000000000" {
+	hash, _ := git.HashTypeFromString(repo.HashType)
+	if commitID == "" || commitID == hash.Empty().String() {
 		result = ""
 	} else {
 		result = repo.Link() + "/commit/" + url.PathEscape(commitID)

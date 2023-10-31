@@ -376,7 +376,12 @@ Gitea or set your environment appropriately.`, "")
 		oldCommitIDs[count] = string(fields[0])
 		newCommitIDs[count] = string(fields[1])
 		refFullNames[count] = git.RefName(fields[2])
-		if refFullNames[count] == git.BranchPrefix+"master" && newCommitIDs[count] != git.EmptySHA && count == total {
+
+		hash, err := git.HashFromString(newCommitIDs[count])
+		if err != nil {
+			return err
+		}
+		if refFullNames[count] == git.BranchPrefix+"master" && newCommitIDs[count] != hash.Type().Empty().String() && count == total {
 			masterPushed = true
 		}
 		count++
@@ -669,7 +674,11 @@ Gitea or set your environment appropriately.`, "")
 		if err != nil {
 			return err
 		}
-		if rs.OldOID != git.EmptySHA {
+		hash, err := git.HashFromString(rs.OldOID)
+		if err != nil {
+			return err
+		}
+		if rs.OldOID != hash.Type().Empty().String() {
 			err = writeDataPktLine(ctx, os.Stdout, []byte("option old-oid "+rs.OldOID))
 			if err != nil {
 				return err

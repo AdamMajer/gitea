@@ -77,8 +77,8 @@ func (t *TemporaryUploadRepository) Clone(branch string) error {
 }
 
 // Init the repository
-func (t *TemporaryUploadRepository) Init() error {
-	if err := git.InitRepository(t.ctx, t.basePath, false); err != nil {
+func (t *TemporaryUploadRepository) Init(hashType string) error {
+	if err := git.InitRepository(t.ctx, t.basePath, false, hashType); err != nil {
 		return err
 	}
 	gitRepo, err := git.OpenRepository(t.ctx, t.basePath)

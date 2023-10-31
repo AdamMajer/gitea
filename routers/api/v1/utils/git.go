@@ -70,21 +70,22 @@ func searchRefCommitByType(ctx *context.APIContext, refType, filter string) (str
 }
 
 // ConvertToSHA1 returns a full-length SHA1 from a potential ID string
-func ConvertToSHA1(ctx gocontext.Context, repo *context.Repository, commitID string) (git.SHA1, error) {
-	if len(commitID) == git.SHAFullLength && git.IsValidSHAPattern(commitID) {
-		sha1, err := git.NewIDFromString(commitID)
+func ConvertToSHA1(ctx gocontext.Context, repo *context.Repository, commitID string) (git.Hash, error) {
+	hashType := repo.GitRepo.Hash
+	if len(commitID) == hashType.FullLength() && hashType.IsValid(commitID) {
+		sha, err := hashType.NewIDFromString(commitID)
 		if err == nil {
-			return sha1, nil
+			return sha, nil
 		}
 	}
 
 	gitRepo, closer, err := git.RepositoryFromContextOrOpen(ctx, repo.Repository.RepoPath())
 	if err != nil {
-		return git.SHA1{}, fmt.Errorf("RepositoryFromContextOrOpen: %w", err)
+		return gitRepo.Hash.Empty(), fmt.Errorf("RepositoryFromContextOrOpen: %w", err)
 	}
 	defer closer.Close()
 
-	return gitRepo.ConvertToSHA1(commitID)
+	return gitRepo.ConvertToGitHash(commitID)
 }
 
 // MustConvertToSHA1 returns a full-length SHA1 string from a potential ID string, or returns origin input if it can't convert to SHA1

@@ -29,7 +29,7 @@ func verifyCommits(oldCommitID, newCommitID string, repo *git.Repository, env []
 	}()
 
 	var command *git.Command
-	if oldCommitID == git.EmptySHA {
+	if oldCommitID == repo.Hash.Empty().String() {
 		// When creating a new branch, the oldCommitID is empty, by using "newCommitID --not --all":
 		// List commits that are reachable by following the newCommitID, exclude "all" existing heads/tags commits
 		// So, it only lists the new commits received, doesn't list the commits already present in the receiving repository
@@ -82,7 +82,7 @@ func readAndVerifyCommit(sha string, repo *git.Repository, env []string) error {
 		_ = stdoutReader.Close()
 		_ = stdoutWriter.Close()
 	}()
-	hash := git.MustIDFromString(sha)
+	hash := repo.Hash.MustIDFromString(sha)
 
 	return git.NewCommand(repo.Ctx, "cat-file", "commit").AddDynamicArguments(sha).
 		Run(&git.RunOpts{

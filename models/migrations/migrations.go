@@ -550,6 +550,8 @@ var migrations = []Migration{
 	NewMigration("Add auth_token table", v1_22.CreateAuthTokenTable),
 	// v282 -> v283
 	NewMigration("Add Index to pull_auto_merge.doer_id", v1_22.AddIndexToPullAutoMergeDoerID),
+	// v283 -> v284
+	NewMigration("Add support for SHA256 git hash references", v1_22.ExpandHashReferencesToSha256),
 }
 
 // GetCurrentDBVersion returns the current db version
