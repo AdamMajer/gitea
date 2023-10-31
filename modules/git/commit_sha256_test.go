@@ -14,7 +14,6 @@ import (
 )
 
 func TestCommitsCountSha256(t *testing.T) {
-
 	bareRepo1Path := filepath.Join(testReposDir, "repo1_bare_sha256")
 
 	commitsCount, err := CommitsCount(DefaultContext,
@@ -141,8 +140,8 @@ func TestHasPreviousCommitSha256(t *testing.T) {
 	commit, err := repo.GetCommit("f004f41359117d319dedd0eaab8c5259ee2263da839dcba33637997458627fdc")
 	assert.NoError(t, err)
 
-	parentSHA := repo.Hash.MustIDFromString("b0ec7af4547047f12d5093e37ef8f1b3b5415ed8ee17894d43a34d7d34212e9c")
-	notParentSHA := repo.Hash.MustIDFromString("42e334efd04cd36eea6da0599913333c26116e1a537ca76e5b6e4af4dda00236")
+	parentSHA := MustIDFromString(repo.Hash, "b0ec7af4547047f12d5093e37ef8f1b3b5415ed8ee17894d43a34d7d34212e9c")
+	notParentSHA := MustIDFromString(repo.Hash, "42e334efd04cd36eea6da0599913333c26116e1a537ca76e5b6e4af4dda00236")
 
 	haz, err := commit.HasPreviousCommit(parentSHA)
 	assert.NoError(t, err)

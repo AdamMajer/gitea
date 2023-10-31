@@ -131,7 +131,7 @@ type blameResult struct {
 }
 
 func performBlame(ctx *context.Context, repoPath string, commit *git.Commit, file string, bypassBlameIgnore bool) (*blameResult, error) {
-	hash, err := ctx.Repo.GitRepo.HashTypeInterface()
+	hash, err := ctx.Repo.GitRepo.HashType()
 	if err != nil {
 		ctx.NotFound("CreateBlameReader", err)
 		return nil, err

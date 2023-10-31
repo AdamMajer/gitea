@@ -169,12 +169,12 @@ func TestListToPushCommits(t *testing.T) {
 		When:  now,
 	}
 
-	hashType := git.HashTypeFromID(git.Sha1)
+	hashType := git.Sha1HashType{}
 	const hexString1 = "0123456789abcdef0123456789abcdef01234567"
-	hash1, err := hashType.NewIDFromString(hexString1)
+	hash1, err := git.NewIDFromString(hashType, hexString1)
 	assert.NoError(t, err)
 	const hexString2 = "fedcba9876543210fedcba9876543210fedcba98"
-	hash2, err := hashType.NewIDFromString(hexString2)
+	hash2, err := git.NewIDFromString(hashType, hexString2)
 	assert.NoError(t, err)
 
 	l := []*git.Commit{

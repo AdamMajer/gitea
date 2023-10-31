@@ -64,7 +64,7 @@ func (repo *Repository) getTag(tagID Hash, name string) (*Tag, error) {
 		// every tag should have a commit ID so return all errors
 		return nil, err
 	}
-	commitID, err := repo.Hash.NewIDFromString(commitIDStr)
+	commitID, err := NewIDFromString(repo.Hash, commitIDStr)
 	if err != nil {
 		return nil, err
 	}

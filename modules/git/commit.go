@@ -231,11 +231,11 @@ func (c *Commit) HasPreviousCommit(commitHash Hash) (bool, error) {
 
 // IsForcePush returns true if a push from oldCommitHash to this is a force push
 func (c *Commit) IsForcePush(oldCommitID string) (bool, error) {
-	h, err := c.repo.HashTypeInterface()
+	h, err := c.repo.HashType()
 	if err != nil {
 		return false, err
 	}
-	if oldCommitID == h.Empty().String() {
+	if oldCommitID == EmptyHash(h).String() {
 		return false, nil
 	}
 

@@ -16,9 +16,9 @@ import (
 func ParseGogitHash(h plumbing.Hash) Hash {
 	switch hash.Size {
 	case 20:
-		return HashTypeFromID(Sha1).MustID(h[:])
+		return Sha1HashType{}.MustID(h[:])
 	case 32:
-		return HashTypeFromID(Sha256).MustID(h[:])
+		return Sha256HashType{}.MustID(h[:])
 	}
 
 	return nil

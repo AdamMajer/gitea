@@ -38,7 +38,7 @@ func ProcReceive(ctx context.Context, repo *repo_model.Repository, gitRepo *git.
 	_, forcePush = opts.GitPushOptions["force-push"]
 
 	for i := range opts.OldCommitIDs {
-		if opts.NewCommitIDs[i] == gitRepo.Hash.Empty().String() {
+		if opts.NewCommitIDs[i] == gitRepo.Hash.NewEmpty().String() {
 			results = append(results, private.HookProcReceiveRefResult{
 				OriginalRef: opts.RefFullNames[i],
 				OldOID:      opts.OldCommitIDs[i],
@@ -151,7 +151,7 @@ func ProcReceive(ctx context.Context, repo *repo_model.Repository, gitRepo *git.
 			results = append(results, private.HookProcReceiveRefResult{
 				Ref:         pr.GetGitRefName(),
 				OriginalRef: opts.RefFullNames[i],
-				OldOID:      gitRepo.Hash.Empty().String(),
+				OldOID:      gitRepo.Hash.NewEmpty().String(),
 				NewOID:      opts.NewCommitIDs[i],
 			})
 			continue

@@ -37,7 +37,7 @@ func (EmptyReader) Read(p []byte) (int, error) {
 	return 0, io.EOF
 }
 
-func (repo *Repository) HashTypeInterface() (HashType, error) {
+func (repo *Repository) HashType() (HashType, error) {
 	if repo != nil && repo.Hash != nil {
 		return repo.Hash, nil
 	}
@@ -60,7 +60,7 @@ func (repo *Repository) HashObject(reader io.Reader) (Hash, error) {
 	if err != nil {
 		return nil, err
 	}
-	return repo.Hash.NewIDFromString(idStr)
+	return NewIDFromString(repo.Hash, idStr)
 }
 
 func (repo *Repository) hashObject(reader io.Reader, save bool) (string, error) {

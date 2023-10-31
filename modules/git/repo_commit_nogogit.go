@@ -135,7 +135,7 @@ func (repo *Repository) getCommitFromBatchReader(rd *bufio.Reader, id Hash) (*Co
 func (repo *Repository) ConvertToGitHash(commitID string) (Hash, error) {
 	hash := repo.Hash
 	if len(commitID) == hash.FullLength() && hash.IsValid(commitID) {
-		hash, err := repo.Hash.NewIDFromString(commitID)
+		hash, err := NewIDFromString(hash, commitID)
 		if err == nil {
 			return hash, nil
 		}
@@ -155,5 +155,5 @@ func (repo *Repository) ConvertToGitHash(commitID string) (Hash, error) {
 		return nil, err
 	}
 
-	return repo.Hash.MustIDFromString(string(sha)), nil
+	return MustIDFromString(repo.Hash, string(sha)), nil
 }

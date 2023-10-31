@@ -65,7 +65,7 @@ func OpenRepository(ctx context.Context, repoPath string) (*Repository, error) {
 	repo.batchWriter, repo.batchReader, repo.batchCancel = CatFileBatch(ctx, repoPath)
 	repo.checkWriter, repo.checkReader, repo.checkCancel = CatFileBatchCheck(ctx, repoPath)
 
-	repo.Hash, err = repo.HashTypeInterface()
+	repo.Hash, err = repo.HashType()
 	if err != nil {
 		return nil, err
 	}

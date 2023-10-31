@@ -49,7 +49,7 @@ ono`), tag: Tag{
 	}
 
 	for _, test := range testData {
-		tag, err := parseTagData(HashTypeFromID(Sha1), test.data)
+		tag, err := parseTagData(Sha1HashType{}, test.data)
 		assert.NoError(t, err)
 		assert.EqualValues(t, test.tag.ID, tag.ID)
 		assert.EqualValues(t, test.tag.Object, tag.Object)

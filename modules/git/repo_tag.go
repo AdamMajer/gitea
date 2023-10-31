@@ -84,7 +84,7 @@ func (repo *Repository) GetTag(name string) (*Tag, error) {
 		return nil, err
 	}
 
-	id, err := repo.Hash.NewIDFromString(idStr)
+	id, err := NewIDFromString(repo.Hash, idStr)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func (repo *Repository) GetTag(name string) (*Tag, error) {
 
 // GetTagWithID returns a Git tag by given name and ID
 func (repo *Repository) GetTagWithID(idStr, name string) (*Tag, error) {
-	id, err := repo.Hash.NewIDFromString(idStr)
+	id, err := NewIDFromString(repo.Hash, idStr)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func parseTagRef(hash HashType, ref map[string]string) (tag *Tag, err error) {
 		Name: ref["refname:short"],
 	}
 
-	tag.ID, err = hash.NewIDFromString(ref["objectname"])
+	tag.ID, err = NewIDFromString(hash, ref["objectname"])
 	if err != nil {
 		return nil, fmt.Errorf("parse objectname '%s': %w", ref["objectname"], err)
 	}
@@ -175,7 +175,7 @@ func parseTagRef(hash HashType, ref map[string]string) (tag *Tag, err error) {
 		tag.Object = tag.ID
 	} else {
 		// annotated tag
-		tag.Object, err = hash.NewIDFromString(ref["object"])
+		tag.Object, err = NewIDFromString(hash, ref["object"])
 		if err != nil {
 			return nil, fmt.Errorf("parse object '%s': %w", ref["object"], err)
 		}
@@ -208,7 +208,7 @@ func parseTagRef(hash HashType, ref map[string]string) (tag *Tag, err error) {
 
 // GetAnnotatedTag returns a Git tag by its SHA, must be an annotated tag
 func (repo *Repository) GetAnnotatedTag(sha string) (*Tag, error) {
-	id, err := repo.Hash.NewIDFromString(sha)
+	id, err := NewIDFromString(repo.Hash, sha)
 	if err != nil {
 		return nil, err
 	}

@@ -63,7 +63,7 @@ func (repo *Repository) getCommitByPathWithID(id Hash, relpath string) (*Commit,
 		return nil, runErr
 	}
 
-	id, err := repo.Hash.NewIDFromString(stdout)
+	id, err := NewIDFromString(repo.Hash, stdout)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func (repo *Repository) CommitsByFileAndRange(opts CommitsByFileAndRangeOptions)
 			}
 			return commits, err
 		}
-		hash, err := repo.Hash.NewIDFromString(string(shaline[0:hashLen]))
+		hash, err := NewIDFromString(repo.Hash, string(shaline[0:hashLen]))
 		if err != nil {
 			return nil, err
 		}

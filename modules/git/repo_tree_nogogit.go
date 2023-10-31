@@ -75,7 +75,7 @@ func (repo *Repository) GetTree(idStr string) (*Tree, error) {
 			idStr = res
 		}
 	}
-	id, err := repo.Hash.NewIDFromString(idStr)
+	id, err := NewIDFromString(repo.Hash, idStr)
 	if err != nil {
 		return nil, err
 	}

@@ -73,7 +73,7 @@ func searchRefCommitByType(ctx *context.APIContext, refType, filter string) (str
 func ConvertToSHA1(ctx gocontext.Context, repo *context.Repository, commitID string) (git.Hash, error) {
 	hashType := repo.GitRepo.Hash
 	if len(commitID) == hashType.FullLength() && hashType.IsValid(commitID) {
-		sha, err := hashType.NewIDFromString(commitID)
+		sha, err := git.NewIDFromString(hashType, commitID)
 		if err == nil {
 			return sha, nil
 		}
@@ -81,7 +81,7 @@ func ConvertToSHA1(ctx gocontext.Context, repo *context.Repository, commitID str
 
 	gitRepo, closer, err := git.RepositoryFromContextOrOpen(ctx, repo.Repository.RepoPath())
 	if err != nil {
-		return gitRepo.Hash.Empty(), fmt.Errorf("RepositoryFromContextOrOpen: %w", err)
+		return gitRepo.Hash.NewEmpty(), fmt.Errorf("RepositoryFromContextOrOpen: %w", err)
 	}
 	defer closer.Close()
 

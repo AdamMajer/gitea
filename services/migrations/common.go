@@ -49,7 +49,7 @@ func CheckAndEnsureSafePR(pr *base.PullRequest, commonCloneBaseURL string, g bas
 
 	// SECURITY: SHAs Must be a SHA
 	// FIXME: hash only a SHA1
-	hash := git.HashTypeFromID(git.Sha1)
+	hash := git.Sha1HashType{}
 	if pr.MergeCommitSHA != "" && !hash.IsValid(pr.MergeCommitSHA) {
 		WarnAndNotice("PR #%d in %s has invalid MergeCommitSHA: %s", pr.Number, g, pr.MergeCommitSHA)
 		pr.MergeCommitSHA = ""

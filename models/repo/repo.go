@@ -316,7 +316,7 @@ func (repo *Repository) HTMLURL() string {
 // note: won't check whether it's an right id
 func (repo *Repository) CommitLink(commitID string) (result string) {
 	hash, _ := git.HashTypeFromString(repo.HashType)
-	if commitID == "" || commitID == hash.Empty().String() {
+	if commitID == "" || commitID == hash.NewEmpty().String() {
 		result = ""
 	} else {
 		result = repo.Link() + "/commit/" + url.PathEscape(commitID)

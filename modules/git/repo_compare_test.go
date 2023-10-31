@@ -131,12 +131,12 @@ func TestGetCommitFilesChanged(t *testing.T) {
 		files      []string
 	}{
 		{
-			repo.Hash.Empty().String(),
+			repo.Hash.NewEmpty().String(),
 			"95bb4d39648ee7e325106df01a621c530863a653",
 			[]string{"file1.txt"},
 		},
 		{
-			repo.Hash.Empty().String(),
+			repo.Hash.NewEmpty().String(),
 			"8d92fc957a4d7cfd98bc375f0b7bb189a0d6c9f2",
 			[]string{"file2.txt"},
 		},
