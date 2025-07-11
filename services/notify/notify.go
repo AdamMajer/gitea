@@ -155,6 +155,13 @@ func PullRequestChangeTargetBranch(ctx context.Context, doer *user_model.User, p
 	}
 }
 
+// PullRequestChangeSourceBranch notifies when a pull request's source branch was changed
+func PullRequestChangeSourceBranch(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, oldBranch string) {
+	for _, notifier := range notifiers {
+		notifier.PullRequestChangeSourceBranch(ctx, doer, pr, oldBranch)
+	}
+}
+
 // PullRequestPushCommits notifies when push commits to pull request's head branch
 func PullRequestPushCommits(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, comment *issues_model.Comment) {
 	for _, notifier := range notifiers {

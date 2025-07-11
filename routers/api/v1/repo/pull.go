@@ -777,6 +777,43 @@ func EditPullRequest(ctx *context.APIContext) {
 		notify_service.PullRequestChangeTargetBranch(ctx, ctx.Doer, pr, form.Base)
 	}
 
+	// change pull request type from branch or from AGit
+	if !pr.HasMerged && len(form.FlowType) != 0 {
+		flow, err := issues_model.PullRequestFlowFromString(form.FlowType)
+		if err != nil {
+			ctx.APIErrorInternal(err)
+			return
+		}
+		err = nil
+		if flow != pr.Flow {
+			switch flow {
+			case issues_model.PullRequestFlowGithub:
+				if !issue.IsPoster(ctx.Doer.ID) && !ctx.Repo.CanWrite(unit.TypeCode) {
+					ctx.Status(http.StatusForbidden)
+					return
+				}
+				err = pr.ConvertToGithubPullRequest(ctx, ctx.Doer)
+			case issues_model.PullRequestFlowAGit:
+				err = pr.ConvertToAgitPullRequest(ctx, ctx.Doer)
+			}
+		}
+		if err != nil {
+			if issues_model.IsErrPullRequestAlreadyExists(err) {
+				ctx.APIError(http.StatusConflict, err)
+				return
+			} else if issues_model.IsErrIssueIsClosed(err) {
+				ctx.APIError(http.StatusUnprocessableEntity, err)
+				return
+			} else if pull_service.IsErrPullRequestHasMerged(err) {
+				ctx.APIError(http.StatusConflict, err)
+				return
+			}
+			ctx.APIErrorInternal(err)
+			return
+		}
+		//		notify_service.PullRequestChangeSourceBranch(ctx, ctx.Doer, pr, form.SourceBranch)
+	}
+
 	// update allow edits
 	if form.AllowMaintainerEdit != nil {
 		if err := pull_service.SetAllowEdits(ctx, ctx.Doer, pr, *form.AllowMaintainerEdit); err != nil {
