@@ -199,6 +199,14 @@ func (*NullNotifier) SyncDeleteRef(ctx context.Context, doer *user_model.User, r
 func (*NullNotifier) RepoPendingTransfer(ctx context.Context, doer, newOwner *user_model.User, repo *repo_model.Repository) {
 }
 
+// ReparentRepository places a place holder function
+func (*NullNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository) {
+}
+
+// RepoPendingReparent places a place holder function
+func (*NullNotifier) RepoPendingReparent(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
+}
+
 // PackageCreate places a place holder function
 func (*NullNotifier) PackageCreate(ctx context.Context, doer *user_model.User, pd *packages_model.PackageDescriptor) {
 }

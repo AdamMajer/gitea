@@ -372,6 +372,20 @@ func RepoPendingTransfer(ctx context.Context, doer, newOwner *user_model.User, r
 	}
 }
 
+// ReparentRepository notifies repository reparented
+func ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository) {
+	for _, notifier := range notifiers {
+		notifier.ReparentRepository(ctx, doer, repo)
+	}
+}
+
+// RepoPendingReparent notifies creation of pending reparenting to notifiers
+func RepoPendingReparent(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
+	for _, notifier := range notifiers {
+		notifier.RepoPendingReparent(ctx, doer, repo, target)
+	}
+}
+
 // PackageCreate notifies creation of a package to notifiers
 func PackageCreate(ctx context.Context, doer *user_model.User, pd *packages_model.PackageDescriptor) {
 	for _, notifier := range notifiers {

@@ -12,6 +12,7 @@ import (
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/util"
+	notify_service "gitea.dev/services/notify"
 )
 
 // StartRepositoryReparent starts the reparenting process for a repository
@@ -29,7 +30,6 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 	// For reparenting, we always require acceptance unless the doer is admin and owner of both?
 	// Actually, the TODO says "use the same mechanism to ask the source repository if it should be reparented".
 	// So we always create a pending request if the doer is not the owner of the source.
-
 	if err := source.LoadOwner(ctx); err != nil {
 		return err
 	}
@@ -40,15 +40,24 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 	}
 
 	if isDirect {
-		return repo_model.ReparentFork(ctx, target.ID, source.ID)
+		if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+			return err
+		}
+		notify_service.ReparentRepository(ctx, doer, source)
+		return nil
 	}
 
-	return repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID)
+	if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+		return err
+	}
+
+	notify_service.RepoPendingReparent(ctx, doer, source, target)
+	return nil
 }
 
 // AcceptReparent accepts a reparenting request
 func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
-	return db.WithTx(ctx, func(ctx context.Context) error {
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
 		if err != nil {
 			return err
@@ -68,7 +77,12 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		}
 
 		return repo_model.DeleteReparent(ctx, source.ID)
-	})
+	}); err != nil {
+		return err
+	}
+
+	notify_service.ReparentRepository(ctx, doer, source)
+	return nil
 }
 
 // RejectReparent rejects a reparenting request
