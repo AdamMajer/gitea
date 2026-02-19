@@ -6,9 +6,8 @@ package repo
 import (
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,6 +51,6 @@ func TestRepoReparent(t *testing.T) {
 	assert.Error(t, err)
 	assert.True(t, IsErrNoPendingReparent(err))
 
-	// Repo status should be back to ready after deletion (actually in my implementation of DeleteReparent I didn't change status back, 
+	// Repo status should be back to ready after deletion (actually in my implementation of DeleteReparent I didn't change status back,
 	// because it should be done in service level or manually. Wait, I should probably check if status needs manual reset)
 }

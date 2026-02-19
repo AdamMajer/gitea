@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 )
 
 // ErrNoPendingRepoReparent is an error type for repositories without a pending
@@ -62,9 +62,9 @@ type RepoReparent struct {
 	ID             int64 `xorm:"pk autoincr"`
 	DoerID         int64
 	Doer           *user_model.User `xorm:"-"`
-	SourceRepoID   int64 `xorm:"UNIQUE(s) INDEX"` // The repo to be demoted to a fork
+	SourceRepoID   int64            `xorm:"UNIQUE(s) INDEX"` // The repo to be demoted to a fork
 	SourceRepo     *Repository      `xorm:"-"`
-	TargetParentID int64 `xorm:"INDEX"` // The fork that will become the parent
+	TargetParentID int64            `xorm:"INDEX"` // The fork that will become the parent
 	TargetParent   *Repository      `xorm:"-"`
 
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX NOT NULL created"`
@@ -132,18 +132,18 @@ func (r *RepoReparent) CanUserAcceptOrRejectReparent(ctx context.Context, u *use
 		log.Error("LoadSourceRepo: %v", err)
 		return false
 	}
-	
+
 	// Check if user has admin/owner permission on the source repo
 	// We'll use the repository's LoadOwner and check permissions.
 	if err := r.SourceRepo.LoadOwner(ctx); err != nil {
 		log.Error("LoadOwner: %v", err)
 		return false
 	}
-	
+
 	if r.SourceRepo.OwnerID == u.ID {
 		return true
 	}
-	
+
 	if u.IsAdmin {
 		return true
 	}

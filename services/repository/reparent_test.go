@@ -6,10 +6,9 @@ package repository
 import (
 	"testing"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,7 +43,7 @@ func TestReparentService(t *testing.T) {
 	assert.NoError(t, AcceptReparent(ctx, user2, repo1))
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
-	
+
 	// Verify database changes for reparenting
 	repo1Updated := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	repo2Updated := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
