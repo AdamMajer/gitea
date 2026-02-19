@@ -339,6 +339,13 @@ type TransferRepoOption struct {
 	TeamIDs *[]int64 `json:"team_ids"`
 }
 
+// ReparentRepoOption options when reparenting a repository
+// swagger:model
+type ReparentRepoOption struct {
+	// required: true
+	NewParent string `json:"new_parent"`
+}
+
 // GitServiceType represents a git service
 type GitServiceType int
 

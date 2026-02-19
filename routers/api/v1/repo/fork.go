@@ -202,7 +202,6 @@ func CreateFork(ctx *context.APIContext) {
 		BaseRepo:    repo,
 		Name:        name,
 		Description: repo.Description,
-		Reparent:    form.Reparent,
 	})
 	if err != nil {
 		if errors.Is(err, util.ErrAlreadyExist) || repo_model.IsErrReachLimitOfRepo(err) {
