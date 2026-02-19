@@ -800,6 +800,26 @@ func repoAssignmentPrepareRepoTransfer(ctx *Context, data *repoAssignmentPrepare
 	}
 }
 
+func repoAssignmentPrepareRepoReparent(ctx *Context, data *repoAssignmentPrepareDataStruct) {
+	if ctx.Repo.Repository.Status == repo_model.RepositoryPendingReparent {
+		repoReparent, err := repo_model.GetPendingReparentByRepo(ctx, ctx.Repo.Repository.ID)
+		if err != nil {
+			ctx.ServerError("GetPendingReparentByRepo", err)
+			return
+		}
+
+		if err := repoReparent.LoadAttributes(ctx); err != nil {
+			ctx.ServerError("LoadAttributes", err)
+			return
+		}
+
+		ctx.Data["RepoReparent"] = repoReparent
+		if ctx.Doer != nil {
+			ctx.Data["CanUserAcceptOrRejectReparent"] = repoReparent.CanUserAcceptOrRejectReparent(ctx, ctx.Doer)
+		}
+	}
+}
+
 // RepoAssignment returns a middleware to handle repository assignment
 func RepoAssignment(ctx *Context) {
 	repoAssignmentPreCheck(ctx)
@@ -814,6 +834,7 @@ func RepoAssignment(ctx *Context) {
 		repoAssignmentAutoRedirectNotReady,
 		repoAssignmentPrepareGitRepo,
 		repoAssignmentPrepareRepoTransfer,
+		repoAssignmentPrepareRepoReparent,
 		repoAssignmentPrepareBranches,
 		repoAssignmentPreparePullRequests,
 	}

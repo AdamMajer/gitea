@@ -7,11 +7,11 @@ import (
 	"context"
 	"fmt"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/globallock"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/globallock"
+	"gitea.dev/modules/util"
 )
 
 // StartRepositoryReparent starts the reparenting process for a repository
@@ -29,7 +29,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 	// For reparenting, we always require acceptance unless the doer is admin and owner of both?
 	// Actually, the TODO says "use the same mechanism to ask the source repository if it should be reparented".
 	// So we always create a pending request if the doer is not the owner of the source.
-	
+
 	if err := source.LoadOwner(ctx); err != nil {
 		return err
 	}
