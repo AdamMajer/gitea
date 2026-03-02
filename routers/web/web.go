@@ -1743,6 +1743,7 @@ func registerWebRoutes(m *web.Router, webAuth *AuthMiddleware) {
 		m.Post("/action/{action:star|unstar}", reqSignIn, starsEnabled, repo.ActionStar)
 		m.Post("/action/{action:watch|unwatch}", reqSignIn, repo.ActionWatch)
 		m.Post("/action/{action:accept_transfer|reject_transfer}", reqSignIn, repo.ActionTransfer)
+		m.Post("/action/{action:accept_reparent|reject_reparent}", reqSignIn, repo.ActionReparent)
 	}, optSignIn, context.RepoAssignment)
 
 	// git lfs uses its own jwt key, and it handles the token & auth by itself, it conflicts with the general "OAuth2" auth method

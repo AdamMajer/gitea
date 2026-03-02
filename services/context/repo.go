@@ -749,7 +749,7 @@ func repoAssignmentPreparePullRequests(ctx *Context, data *repoAssignmentPrepare
 }
 
 func repoAssignmentPrepareRepoTransfer(ctx *Context, data *repoAssignmentPrepareDataStruct) {
-	if ctx.Repo.Repository.Status == repo_model.RepositoryPendingTransfer {
+	if ctx.Repo.Repository.Status == repo_model.RepositoryPendingTransfer || ctx.Repo.Repository.Status == repo_model.RepositoryPendingReparent {
 		repoTransfer, err := repo_model.GetPendingRepositoryTransfer(ctx, ctx.Repo.Repository)
 		if err != nil {
 			ctx.ServerError("GetPendingRepositoryTransfer", err)
@@ -761,8 +761,16 @@ func repoAssignmentPrepareRepoTransfer(ctx *Context, data *repoAssignmentPrepare
 			return
 		}
 
-		ctx.Data["RepoTransfer"] = repoTransfer
-		ctx.Data["CanUserAcceptOrRejectTransfer"] = ctx.Doer != nil && repoTransfer.CanUserAcceptOrRejectTransfer(ctx, ctx.Doer)
+		if repoTransfer.IsReparent(ctx) {
+			ctx.Data["RepoReparent"] = repoTransfer
+		} else {
+			ctx.Data["RepoTransfer"] = repoTransfer
+		}
+		if ctx.Doer != nil {
+			ctx.Data["CanUserAcceptTransfer"] = repoTransfer.CanUserAcceptTransfer(ctx, ctx.Doer)
+			ctx.Data["CanUserRejectTransfer"] = repoTransfer.CanUserRejectTransfer(ctx, ctx.Doer)
+			ctx.Data["CanUserAcceptOrRejectTransfer"] = repoTransfer.CanUserAcceptOrRejectTransfer(ctx, ctx.Doer)
+		}
 	}
 }
 
