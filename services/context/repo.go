@@ -684,7 +684,7 @@ func RepoAssignment(ctx *Context) {
 	ctx.Data["CanCompareOrPull"] = canCompare
 	ctx.Data["PullRequestCtx"] = ctx.Repo.PullRequest
 
-	if ctx.Repo.Repository.Status == repo_model.RepositoryPendingTransfer {
+	if ctx.Repo.Repository.Status == repo_model.RepositoryPendingTransfer || ctx.Repo.Repository.Status == repo_model.RepositoryPendingReparent {
 		repoTransfer, err := repo_model.GetPendingRepositoryTransfer(ctx, ctx.Repo.Repository)
 		if err != nil {
 			ctx.ServerError("GetPendingRepositoryTransfer", err)
@@ -696,8 +696,14 @@ func RepoAssignment(ctx *Context) {
 			return
 		}
 
-		ctx.Data["RepoTransfer"] = repoTransfer
+		if repoTransfer.IsReparent(ctx) {
+			ctx.Data["RepoReparent"] = repoTransfer
+		} else {
+			ctx.Data["RepoTransfer"] = repoTransfer
+		}
 		if ctx.Doer != nil {
+			ctx.Data["CanUserAcceptTransfer"] = repoTransfer.CanUserAcceptTransfer(ctx, ctx.Doer)
+			ctx.Data["CanUserRejectTransfer"] = repoTransfer.CanUserRejectTransfer(ctx, ctx.Doer)
 			ctx.Data["CanUserAcceptOrRejectTransfer"] = repoTransfer.CanUserAcceptOrRejectTransfer(ctx, ctx.Doer)
 		}
 	}
