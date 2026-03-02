@@ -851,6 +851,30 @@
 						{{end}}
 					</div>
 				</div>
+
+				<div class="flex-item">
+					<div class="flex-item-main">
+						<div class="flex-item-title">{{ctx.Locale.Tr "repo.reparent"}}</div>
+						<div class="flex-item-body">
+							{{if .RepoReparent}}
+								{{ctx.Locale.Tr "repo.reparent.desc" .RepoReparent.TargetOwner.DisplayName .RepoReparent.TargetName}}
+							{{else}}
+								{{ctx.Locale.Tr "repo.reparent_desc"}}
+							{{end}}
+						</div>
+					</div>
+					<div class="flex-item-trailing">
+						{{if .RepoReparent}}
+							<form class="ui form" action="{{.Link}}" method="post">
+								{{.CsrfTokenHtml}}
+								<input type="hidden" name="action" value="cancel_reparent">
+								<button class="ui red button">{{ctx.Locale.Tr "repo.reparent.reject"}}</button>
+							</form>
+						{{else}}
+							<button class="ui basic red show-modal button" data-modal="#reparent-repo-modal">{{ctx.Locale.Tr "repo.reparent"}}</button>
+						{{end}}
+					</div>
+				</div>
 				{{if .Permission.CanRead ctx.Consts.RepoUnitTypeWiki}}
 					<div class="item">
 						<div class="item-main">
@@ -954,6 +978,33 @@
 				</div>
 
 				{{template "base/modal_actions_confirm" (dict "ModalButtonDangerText" (ctx.Locale.Tr "repo.settings.transfer_perform"))}}
+			</form>
+		</div>
+	</div>
+
+	<div class="ui small modal" id="reparent-repo-modal">
+		<div class="header">
+			{{ctx.Locale.Tr "repo.reparent"}}
+		</div>
+		<div class="content">
+			<div class="ui warning message">
+				{{ctx.Locale.Tr "repo.reparent_notices_1"}} <br>
+				{{ctx.Locale.Tr "repo.reparent_notices_2"}}
+			</div>
+			<form class="ui form" action="{{.Link}}" method="post">
+				{{.CsrfTokenHtml}}
+				<input type="hidden" name="action" value="reparent">
+				{{template "repo/settings/repo_name_confirm_fields" (dict "RepoName" .Repository.Name)}}
+				<div class="field">
+					<label>{{ctx.Locale.Tr "repo.repo_name"}} ({{ctx.Locale.Tr "repo.reparent.new_name"}})</label>
+					<input name="new_name" placeholder="{{.Repository.Name}}">
+				</div>
+				<div class="required field">
+					<label for="new_reparent_owner_name">{{ctx.Locale.Tr "repo.settings.transfer_owner"}}</label>
+					<input id="new_reparent_owner_name" name="new_owner_name" required>
+				</div>
+
+				{{template "base/modal_actions_confirm" (dict "ModalButtonDangerText" (ctx.Locale.Tr "repo.reparent"))}}
 			</form>
 		</div>
 	</div>
