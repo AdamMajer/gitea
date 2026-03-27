@@ -24,7 +24,7 @@ func acceptReparent(ctx *context.Context) {
 	}
 
 	if !repoTransfer.CanUserAcceptOrRejectTransfer(ctx, ctx.Doer) {
-		ctx.HTTPError(http.StatusForbidden, "Only the repository owner can accept reparenting")
+		ctx.HTTPError(http.StatusForbidden, string(ctx.Tr("repo.reparent.no_permission_to_accept")))
 		return
 	}
 
@@ -49,7 +49,7 @@ func rejectReparent(ctx *context.Context) {
 	}
 
 	if !repoTransfer.CanUserAcceptOrRejectTransfer(ctx, ctx.Doer) && repoTransfer.DoerID != ctx.Doer.ID {
-		ctx.HTTPError(http.StatusForbidden, "Only the repository owner or the initiator can reject/cancel reparenting")
+		ctx.HTTPError(http.StatusForbidden, string(ctx.Tr("repo.reparent.no_permission_to_reject")))
 		return
 	}
 

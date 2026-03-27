@@ -844,7 +844,7 @@
 							{{if .RepoReparent}}
 								{{ctx.Locale.Tr "repo.reparent.desc" .RepoReparent.TargetOwner.DisplayName}}
 							{{else}}
-								Move the upstream parent of the repository to a new fork
+								{{ctx.Locale.Tr "repo.reparent_desc"}}
 							{{end}}
 						</div>
 					</div>
@@ -1014,8 +1014,8 @@
 		</div>
 		<div class="content">
 			<div class="ui warning message">
-				Move the upstream parent of the repository to a new fork. <br>
-				The repository will become a fork of the repository with the same name owned by the new owner.
+				{{ctx.Locale.Tr "repo.reparent_notices_1"}} <br>
+				{{ctx.Locale.Tr "repo.reparent_notices_2"}}
 			</div>
 			<form class="ui form" action="{{.Link}}" method="post">
 				{{.CsrfTokenHtml}}
