@@ -28,6 +28,25 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source 
 			return err
 		}
 
+		targetRepo, err := repo_model.GetUserFork(ctx, source.ID, targetOwnerID)
+		if err != nil {
+			return err
+		}
+
+		if targetRepo == nil {
+			// Check if a repository with the same name already exists
+			exists, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, source.Name)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return repo_model.ErrRepoAlreadyExist{
+					Uname: targetOwner.Name,
+					Name:  source.Name,
+				}
+			}
+		}
+
 		exist, err := repo_model.IsRepositoryTransferExist(ctx, source.ID)
 		if err != nil {
 			return err

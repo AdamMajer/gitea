@@ -306,6 +306,8 @@ func handleActionError(ctx *context.Context, err error) {
 	case repo_service.IsRepositoryLimitReached(err):
 		limit := err.(repo_service.LimitReachedError).Limit
 		ctx.Flash.Error(ctx.TrN(limit, "repo.form.reach_limit_of_creation_1", "repo.form.reach_limit_of_creation_n", limit))
+	case repo_model.IsErrRepoAlreadyExist(err):
+		ctx.Flash.Error(ctx.Tr("repo.settings.new_owner_has_same_repo"))
 	case errors.Is(err, util.ErrPermissionDenied):
 		ctx.HTTPError(http.StatusNotFound)
 	default:

@@ -936,6 +936,8 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	if err != nil {
 		if repo_model.IsErrRepoTransferInProgress(err) {
 			ctx.RenderWithErr(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)
+		} else if repo_model.IsErrRepoAlreadyExist(err) {
+			ctx.RenderWithErr(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
 		} else {
 			ctx.ServerError("StartRepositoryReparent", err)
 		}

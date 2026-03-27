@@ -156,3 +156,34 @@ func TestAPIRepoReparentPermissions(t *testing.T) {
 	}).AddTokenAuth(token5)
 	MakeRequest(t, reqAuto, http.StatusForbidden)
 }
+
+func TestAPIRepoReparentAlreadyExists(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session2 := loginUser(t, user2.Name)
+	token2 := getTokenForLoggedInUser(t, session2, auth_model.AccessTokenScopeWriteRepository)
+
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	// user4 already has user4/repo1 (ID 3 in repository.yml? let's check)
+	// Actually user2/repo1 has ID 1. user4/repo1 is NOT in default fixtures?
+	// Let's use user2 and user1.
+	// user1 has user1/repo1 (which is ID 35 in fixtures? let's check)
+	// Better: create a repo for user4 with same name.
+	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	session4 := loginUser(t, user4.Name)
+	token4 := getTokenForLoggedInUser(t, session4, auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteUser)
+
+	// Create user4/repo1
+	reqCreate := NewRequestWithJSON(t, "POST", "/api/v1/user/repos", &api.CreateRepoOption{
+		Name: repo1.Name,
+	}).AddTokenAuth(token4)
+	MakeRequest(t, reqCreate, http.StatusCreated)
+
+	// Now try to reparent user2/repo1 to user4
+	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
+		NewOwner: user4.Name,
+	}).AddTokenAuth(token2)
+	MakeRequest(t, req, http.StatusConflict)
+}

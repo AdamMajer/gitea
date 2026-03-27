@@ -75,6 +75,8 @@ func Reparent(ctx *context.APIContext) {
 		switch {
 		case repo_model.IsErrRepoTransferInProgress(err):
 			ctx.APIError(http.StatusConflict, err)
+		case repo_model.IsErrRepoAlreadyExist(err):
+			ctx.APIError(http.StatusConflict, err)
 		default:
 			ctx.APIErrorInternal(err)
 		}
