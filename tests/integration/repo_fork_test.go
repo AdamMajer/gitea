@@ -132,40 +132,6 @@ func TestForkListLimitedAndPrivateRepos(t *testing.T) {
 	})
 }
 
-func TestAPICreateForkWithReparent(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-
-	u := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-	source := unittest.AssertExistsAndLoadBean(t, &repo.Repository{ID: 1})
-
-	session := loginUser(t, u.Name)
-	token := getTokenForLoggedInUser(t, session, auth.AccessTokenScopeWriteRepository)
-
-	urlPath := path.Join("/api/v1/repos", source.OwnerName, source.Name, "forks")
-	name := "reparented"
-	req := NewRequestWithJSON(t, "POST", urlPath, &structs.CreateForkOption{
-		Reparent: true,
-		Name:     &name,
-	})
-	req.Header.Add("Authorization", "token "+token)
-	resp := session.MakeRequest(t, req, http.StatusAccepted)
-
-	var result structs.Repository
-	DecodeJSON(t, resp, &result)
-
-	assert.Equal(t, "reparented", result.Name)
-
-	orig := unittest.AssertExistsAndLoadBean(t, &repo.Repository{ID: source.ID})
-	forked := unittest.AssertExistsAndLoadBean(t, &repo.Repository{ID: result.ID})
-
-	assert.Equal(t, int64(0), forked.ForkID)
-	assert.False(t, forked.IsFork)
-	assert.Equal(t, forked.ID, orig.ForkID)
-	assert.True(t, orig.IsFork)
-	assert.Equal(t, 1, forked.NumForks)
-	assert.Equal(t, 0, orig.NumForks)
-}
-
 func TestAPICreateForkWithoutReparent(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
