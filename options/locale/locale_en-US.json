@@ -3433,6 +3433,7 @@
   "action.merge_pull_request": "merged pull request <a href=\"%[1]s\">%[3]s#%[2]s</a>",
   "action.auto_merge_pull_request": "automatically merged pull request <a href=\"%[1]s\">%[3]s#%[2]s</a>",
   "action.transfer_repo": "transferred repository <code>%s</code> to <a href=\"%s\">%s</a>",
+  "action.reparent_repo": "reparented repository <code>%s</code> to <a href=\"%s\">%s</a>",
   "action.push_tag": "pushed tag <a href=\"%[2]s\">%[3]s</a> to <a href=\"%[1]s\">%[4]s</a>",
   "action.delete_tag": "deleted tag %[2]s from <a href=\"%[1]s\">%[3]s</a>",
   "action.delete_branch": "deleted branch %[2]s from <a href=\"%[1]s\">%[3]s</a>",

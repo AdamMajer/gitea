@@ -6,6 +6,7 @@ package repository
 import (
 	"testing"
 
+	activities_model "code.gitea.io/gitea/models/activities"
 	repo_model "code.gitea.io/gitea/models/repo"
 	"code.gitea.io/gitea/models/unittest"
 	user_model "code.gitea.io/gitea/models/user"
@@ -14,6 +15,8 @@ import (
 )
 
 func TestReparentService(t *testing.T) {
+	registerNotifier()
+
 	assert.NoError(t, unittest.PrepareTestDatabase())
 
 	ctx := t.Context()
@@ -52,4 +55,12 @@ func TestReparentService(t *testing.T) {
 	assert.True(t, repo1Updated.IsFork)
 	assert.Equal(t, int64(0), repo2Updated.ForkID)
 	assert.False(t, repo2Updated.IsFork)
+
+	// Verify that the timeline action was created correctly
+	unittest.AssertExistsAndLoadBean(t, &activities_model.Action{
+		OpType:    activities_model.ActionReparentRepo,
+		ActUserID: 2,
+		RepoID:    1,
+		Content:   "repo1",
+	})
 }
