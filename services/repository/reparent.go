@@ -40,10 +40,19 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 	}
 
 	if isDirect {
+		oldOwnerName := ""
+		if source.ForkID > 0 {
+			if oldParent, err := repo_model.GetRepositoryByID(ctx, source.ForkID); err == nil {
+				oldOwnerName = oldParent.OwnerName
+			}
+		} else if source.BaseRepo != nil {
+			oldOwnerName = source.BaseRepo.OwnerName
+		}
+
 		if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
 			return err
 		}
-		notify_service.ReparentRepository(ctx, doer, source)
+		notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
 		return nil
 	}
 
@@ -57,6 +66,15 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 
 // AcceptReparent accepts a reparenting request
 func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
+	oldOwnerName := ""
+	if source.ForkID > 0 {
+		if oldParent, err := repo_model.GetRepositoryByID(ctx, source.ForkID); err == nil {
+			oldOwnerName = oldParent.OwnerName
+		}
+	} else if source.BaseRepo != nil {
+		oldOwnerName = source.BaseRepo.OwnerName
+	}
+
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
 		if err != nil {
@@ -81,7 +99,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		return err
 	}
 
-	notify_service.ReparentRepository(ctx, doer, source)
+	notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
 	return nil
 }
 
