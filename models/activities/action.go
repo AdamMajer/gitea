@@ -62,6 +62,7 @@ const (
 	ActionPullReviewDismissed                             // 25
 	ActionPullRequestReadyForReview                       // 26
 	ActionAutoMergePullRequest                            // 27
+	ActionReparentRepo                                    // 28
 )
 
 func (at ActionType) String() string {
@@ -82,6 +83,8 @@ func (at ActionType) String() string {
 		return "create_pull_request"
 	case ActionTransferRepo:
 		return "transfer_repo"
+	case ActionReparentRepo:
+		return "reparent_repo"
 	case ActionPushTag:
 		return "push_tag"
 	case ActionCommentIssue:

@@ -72,7 +72,7 @@ type Actioner interface {
 // actionIcon accepts an action operation type and returns an icon class name.
 func actionIcon(opType activities_model.ActionType) string {
 	switch opType {
-	case activities_model.ActionCreateRepo, activities_model.ActionTransferRepo, activities_model.ActionRenameRepo:
+	case activities_model.ActionCreateRepo, activities_model.ActionTransferRepo, activities_model.ActionRenameRepo, activities_model.ActionReparentRepo:
 		return "repo"
 	case activities_model.ActionCommitRepo:
 		return "git-commit"

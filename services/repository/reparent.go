@@ -130,7 +130,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		return repo_model.DeleteRepositoryTransfer(ctx, source.ID)
 	})
 	if err == nil {
-		notify_service.TransferRepository(ctx, doer, source, oldOwnerName)
+		notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
 	}
 	return err
 }

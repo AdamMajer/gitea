@@ -183,6 +183,10 @@ func (*NullNotifier) RenameRepository(ctx context.Context, doer *user_model.User
 func (*NullNotifier) TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
 }
 
+// ReparentRepository places a place holder function
+func (*NullNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+}
+
 // SyncPushCommits places a place holder function
 func (*NullNotifier) SyncPushCommits(ctx context.Context, pusher *user_model.User, repo *repo_model.Repository, opts *repository.PushUpdateOptions, commits *repository.PushCommits) {
 }
