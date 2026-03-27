@@ -1183,7 +1183,7 @@ func Routes() *web.Router {
 					m.Post("/reject", repo.RejectTransfer)
 				}, reqToken())
 				m.Group("/reparent", func() {
-					m.Post("", bind(api.ReparentRepoOption{}), repo.Reparent)
+					m.Post("", reqOwner(), bind(api.ReparentRepoOption{}), repo.Reparent)
 					m.Post("/accept", repo.AcceptReparent)
 					m.Post("/reject", repo.RejectReparent)
 				}, reqToken())
