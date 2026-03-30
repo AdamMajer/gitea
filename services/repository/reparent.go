@@ -82,7 +82,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source 
 
 // AcceptReparent accepts a pending reparenting request
 func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
-	oldOwnerName := source.OwnerName
+	var targetRepo *repo_model.Repository
 	err := db.WithTx(ctx, func(ctx context.Context) error {
 		repoTransfer, err := repo_model.GetPendingRepositoryTransfer(ctx, source)
 		if err != nil {
@@ -107,7 +107,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return err
 		}
 
-		targetRepo, err := repo_model.GetUserFork(ctx, source.ID, targetOwnerID)
+		targetRepo, err = repo_model.GetUserFork(ctx, source.ID, targetOwnerID)
 		if err != nil {
 			return err
 		}
@@ -149,7 +149,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		return repo_model.DeleteRepositoryTransfer(ctx, source.ID)
 	})
 	if err == nil {
-		notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
+		notify_service.ReparentRepository(ctx, doer, source, targetRepo)
 	}
 	return err
 }
