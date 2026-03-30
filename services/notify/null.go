@@ -184,7 +184,7 @@ func (*NullNotifier) TransferRepository(ctx context.Context, doer *user_model.Us
 }
 
 // ReparentRepository places a place holder function
-func (*NullNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+func (*NullNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
 }
 
 // SyncPushCommits places a place holder function

@@ -303,9 +303,9 @@ func TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_m
 }
 
 // ReparentRepository notifies repository reparented to notifiers
-func ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+func ReparentRepository(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
 	for _, notifier := range notifiers {
-		notifier.ReparentRepository(ctx, doer, repo, oldOwnerName)
+		notifier.ReparentRepository(ctx, doer, repo, target)
 	}
 }
 

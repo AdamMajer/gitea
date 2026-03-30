@@ -30,7 +30,7 @@
 					{{else if .GetOpType.InActions "transfer_repo"}}
 						{{ctx.Locale.Tr "action.transfer_repo" .GetContent (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
 					{{else if .GetOpType.InActions "reparent_repo"}}
-						{{ctx.Locale.Tr "action.reparent_repo" .GetContent (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
+						{{ctx.Locale.Tr "action.reparent_repo" .GetContent (printf "%s/%s" AppSubUrl (.GetContent | PathEscapeSegments)) (.GetRepoLink ctx) (.ShortRepoPath ctx)}}
 					{{else if .GetOpType.InActions "push_tag"}}
 						{{ctx.Locale.Tr "action.push_tag" (.GetRepoLink ctx) (.GetRefLink ctx) .GetTag (.ShortRepoPath ctx)}}
 					{{else if .GetOpType.InActions "comment_issue"}}
