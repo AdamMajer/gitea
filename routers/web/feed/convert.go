@@ -104,7 +104,8 @@ func feedActionsToFeedItems(ctx *context.Context, actions activities_model.Actio
 			titleExtra = ctx.Locale.Tr("action.transfer_repo", act.GetContent(), act.GetRepoAbsoluteLink(ctx), act.ShortRepoPath(ctx))
 		case activities_model.ActionReparentRepo:
 			link.Href = act.GetRepoAbsoluteLink(ctx)
-			titleExtra = ctx.Locale.Tr("action.reparent_repo", act.GetContent(), act.GetRepoAbsoluteLink(ctx), act.ShortRepoPath(ctx))
+			targetLink := setting.AppSubURL + "/" + util.PathEscapeSegments(act.GetContent())
+			titleExtra = ctx.Locale.Tr("action.reparent_repo", act.GetContent(), targetLink, act.GetRepoAbsoluteLink(ctx), act.ShortRepoPath(ctx))
 		case activities_model.ActionPushTag:
 			link.Href = toTagLink(ctx, act)
 			titleExtra = ctx.Locale.Tr("action.push_tag", act.GetRepoAbsoluteLink(ctx), link.Href, act.GetTag(), act.ShortRepoPath(ctx))

@@ -61,6 +61,6 @@ func TestReparentService(t *testing.T) {
 		OpType:    activities_model.ActionReparentRepo,
 		ActUserID: 2,
 		RepoID:    1,
-		Content:   "repo1",
+		Content:   "user2/repo2",
 	})
 }
