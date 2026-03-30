@@ -186,7 +186,7 @@ func (a *actionNotifier) TransferRepository(ctx context.Context, doer *user_mode
 	}
 }
 
-func (a *actionNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+func (a *actionNotifier) ReparentRepository(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
 	if err := NotifyWatchers(ctx, &activities_model.Action{
 		ActUserID: doer.ID,
 		ActUser:   doer,
@@ -194,7 +194,7 @@ func (a *actionNotifier) ReparentRepository(ctx context.Context, doer *user_mode
 		RepoID:    repo.ID,
 		Repo:      repo,
 		IsPrivate: repo.IsPrivate,
-		Content:   path.Join(oldOwnerName, repo.Name),
+		Content:   target.FullName(),
 	}); err != nil {
 		log.Error("NotifyWatchers: %v", err)
 	}

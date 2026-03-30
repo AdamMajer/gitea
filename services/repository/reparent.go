@@ -40,19 +40,10 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 	}
 
 	if isDirect {
-		oldOwnerName := ""
-		if source.ForkID > 0 {
-			if oldParent, err := repo_model.GetRepositoryByID(ctx, source.ForkID); err == nil {
-				oldOwnerName = oldParent.OwnerName
-			}
-		} else if source.BaseRepo != nil {
-			oldOwnerName = source.BaseRepo.OwnerName
-		}
-
 		if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
 			return err
 		}
-		notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
+		notify_service.ReparentRepository(ctx, doer, source, target)
 		return nil
 	}
 
@@ -66,14 +57,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 
 // AcceptReparent accepts a reparenting request
 func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
-	oldOwnerName := ""
-	if source.ForkID > 0 {
-		if oldParent, err := repo_model.GetRepositoryByID(ctx, source.ForkID); err == nil {
-			oldOwnerName = oldParent.OwnerName
-		}
-	} else if source.BaseRepo != nil {
-		oldOwnerName = source.BaseRepo.OwnerName
-	}
+	var targetRepo *repo_model.Repository
 
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
@@ -83,6 +67,12 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 
 		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) {
 			return util.ErrPermissionDenied
+		}
+
+		var errGet error
+		targetRepo, errGet = repo_model.GetRepositoryByID(ctx, reparent.TargetParentID)
+		if errGet != nil {
+			return errGet
 		}
 
 		if err := repo_model.ReparentFork(ctx, reparent.TargetParentID, source.ID); err != nil {
@@ -99,7 +89,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		return err
 	}
 
-	notify_service.ReparentRepository(ctx, doer, source, oldOwnerName)
+	notify_service.ReparentRepository(ctx, doer, source, targetRepo)
 	return nil
 }
 
