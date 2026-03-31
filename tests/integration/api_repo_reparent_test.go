@@ -31,7 +31,8 @@ func TestAPIRepoReparent(t *testing.T) {
 
 	// Start reparenting repo1 to become a fork of repo2
 	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
-		NewParent: repo2.Name,
+		NewParent: user2.Name,
+		NewName:   repo2.Name,
 	}).AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusAccepted)
 
@@ -55,7 +56,8 @@ func TestAPIRepoReparentPermissions(t *testing.T) {
 	repo2 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
 
 	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
-		NewParent: repo2.Name,
+		NewParent: user2.Name,
+		NewName:   repo2.Name,
 	}).AddTokenAuth(token10)
 	MakeRequest(t, req, http.StatusForbidden)
 }
@@ -71,7 +73,8 @@ func TestAPIRepoReparentNotExist(t *testing.T) {
 
 	// Now try to reparent user2/repo1 to a non-existent parent repository
 	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
-		NewParent: "non-existent-repo",
+		NewParent: "non-existent-owner",
+		NewName:   "non-existent-repo",
 	}).AddTokenAuth(token2)
 	MakeRequest(t, req, http.StatusNotFound)
 }

@@ -57,7 +57,12 @@ func Reparent(ctx *context.APIContext) {
 
 	opts := web.GetForm(ctx).(*api.ReparentRepoOption)
 
-	targetParent, err := repo_model.GetRepositoryByOwnerAndName(ctx, ctx.Repo.Owner.Name, opts.NewParent)
+	parentName := opts.NewName
+	if parentName == "" {
+		parentName = ctx.Repo.Repository.Name
+	}
+
+	targetParent, err := repo_model.GetRepositoryByOwnerAndName(ctx, opts.NewParent, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoNotExist(err) {
 			ctx.APIError(http.StatusNotFound, "The new parent repository does not exist")
