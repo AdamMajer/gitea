@@ -177,3 +177,45 @@ func TestAPIRepoReparentAlreadyExists(t *testing.T) {
 	}).AddTokenAuth(token2)
 	MakeRequest(t, req, http.StatusConflict)
 }
+
+func TestAPIRepoReparentWithNameChange(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session2 := loginUser(t, user2.Name)
+	token2 := getTokenForLoggedInUser(t, session2, auth_model.AccessTokenScopeWriteRepository)
+
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+
+	newName := "new-parent-name"
+
+	// user2 (owner) requests reparenting to user5 with new name
+	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
+		NewOwner: user5.Name,
+		NewName:  newName,
+	}).AddTokenAuth(token2)
+	MakeRequest(t, req, http.StatusAccepted)
+
+	// Verify pending transfer has correct target name
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	transfer := unittest.AssertExistsAndLoadBean(t, &repo_model.RepoTransfer{RepoID: repo1.ID})
+	assert.Equal(t, newName, transfer.TargetName)
+
+	// user5 (the target owner) accepts. This should trigger fork creation with newName and swap.
+	session5 := loginUser(t, user5.Name)
+	token5 := getTokenForLoggedInUser(t, session5, auth_model.AccessTokenScopeWriteRepository)
+	reqAccept := NewRequest(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent/accept", user2.Name, repo1.Name)).AddTokenAuth(token5)
+	MakeRequest(t, reqAccept, http.StatusAccepted)
+
+	// Verify repo1 is now a fork
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	assert.True(t, repo1.IsFork)
+	assert.NotEqual(t, int64(0), repo1.ForkID)
+
+	// Verify the new parent (created from fork) has the new name
+	newParent := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo1.ForkID})
+	assert.False(t, newParent.IsFork)
+	assert.Equal(t, user5.ID, newParent.OwnerID)
+	assert.Equal(t, newName, newParent.Name)
+}

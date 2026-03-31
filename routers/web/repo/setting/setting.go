@@ -932,7 +932,7 @@ func handleSettingsPostReparent(ctx *context.Context) {
 		ctx.Repo.GitRepo = nil
 	}
 
-	repo, err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, newOwner.ID)
+	repo, err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, newOwner.ID, ctx.FormString("new_name"))
 	if err != nil {
 		if repo_model.IsErrRepoTransferInProgress(err) {
 			ctx.RenderWithErr(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)

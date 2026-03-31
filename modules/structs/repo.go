@@ -307,6 +307,8 @@ type ReparentRepoOption struct {
 	// name of the organization or user that owns the fork to be promoted
 	// required: true
 	NewOwner string `json:"new_owner"`
+	// new name of the parent repository
+	NewName string `json:"new_name"`
 }
 
 // GitServiceType represents a git service

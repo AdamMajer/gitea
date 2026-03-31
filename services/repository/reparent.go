@@ -15,7 +15,11 @@ import (
 )
 
 // StartRepositoryReparent marks the repository as pending reparenting
-func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository, targetOwnerID int64) (*repo_model.Repository, error) {
+func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository, targetOwnerID int64, targetRepoName string) (*repo_model.Repository, error) {
+	if targetRepoName == "" {
+		targetRepoName = source.Name
+	}
+
 	var targetOwner *user_model.User
 	err := db.WithTx(ctx, func(ctx context.Context) error {
 		var err error
@@ -34,15 +38,15 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source 
 		}
 
 		if targetRepo == nil {
-			// Check if a repository with the same name already exists
-			exists, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, source.Name)
+			// Check if a repository with the target name already exists
+			exists, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, targetRepoName)
 			if err != nil {
 				return err
 			}
 			if exists {
 				return repo_model.ErrRepoAlreadyExist{
 					Uname: targetOwner.Name,
-					Name:  source.Name,
+					Name:  targetRepoName,
 				}
 			}
 		}
@@ -69,6 +73,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source 
 			CreatedUnix: timeutil.TimeStampNow(),
 			UpdatedUnix: timeutil.TimeStampNow(),
 			DoerID:      doer.ID,
+			TargetName:  targetRepoName,
 			TeamIDs:     []int64{targetOwnerID},
 		}
 
@@ -114,21 +119,21 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 
 		if targetRepo == nil {
 			// Check if a repository with the same name already exists
-			exists, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, source.Name)
+			exists, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, repoTransfer.TargetName)
 			if err != nil {
 				return err
 			}
 			if exists {
 				return repo_model.ErrRepoAlreadyExist{
 					Uname: targetOwner.Name,
-					Name:  source.Name,
+					Name:  repoTransfer.TargetName,
 				}
 			}
 
 			// Create the fork
 			targetRepo, err = ForkRepository(ctx, doer, targetOwner, ForkRepoOptions{
 				BaseRepo:    source,
-				Name:        source.Name,
+				Name:        repoTransfer.TargetName,
 				Description: source.Description,
 			})
 			if err != nil {

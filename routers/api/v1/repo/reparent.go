@@ -70,7 +70,7 @@ func Reparent(ctx *context.APIContext) {
 		return
 	}
 
-	repo, err := repo_service.StartRepositoryReparent(ctx, ctx.Doer, ctx.Repo.Repository, targetOwner.ID)
+	repo, err := repo_service.StartRepositoryReparent(ctx, ctx.Doer, ctx.Repo.Repository, targetOwner.ID, opts.NewName)
 	if err != nil {
 		switch {
 		case repo_model.IsErrRepoTransferInProgress(err):
