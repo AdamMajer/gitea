@@ -927,7 +927,12 @@ func handleSettingsPostReparent(ctx *context.Context) {
 		ctx.Repo.GitRepo = nil
 	}
 
-	targetParent, err := repo_model.GetRepositoryByName(ctx, newOwner.ID, repo.Name)
+	parentName := ctx.FormString("new_name")
+	if parentName == "" {
+		parentName = repo.Name
+	}
+
+	targetParent, err := repo_model.GetRepositoryByName(ctx, newOwner.ID, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoNotExist(err) {
 			ctx.RenderWithErr(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)

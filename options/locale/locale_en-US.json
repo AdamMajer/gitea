@@ -1062,6 +1062,7 @@
   "repo.transfer.no_permission_to_accept": "You do not have permission to accept this transfer.",
   "repo.transfer.no_permission_to_reject": "You do not have permission to reject this transfer.",
   "repo.reparent.accept": "Accept Reparent",
+  "repo.reparent.desc": "Pending Reparenting to %s as %[2]s",
   "repo.reparent.accept_desc": "%s wants to make this repository a fork of \"%s\"",
   "repo.reparent.reject": "Cancel Reparent",
   "repo.reparent.no_permission_to_accept": "You do not have permission to accept this reparenting request.",

@@ -56,6 +56,7 @@
 						</form>
 					{{end}}
 					{{if $.RepoReparent}}
+						<div class="ui yellow label">{{ctx.Locale.Tr "repo.reparent.desc" $.RepoReparent.TargetParent.OwnerName $.RepoReparent.TargetParent.Name}}</div>
 						<form method="post" action="{{$.RepoLink}}/action/accept_reparent?redirect_to={{$.RepoLink}}">
 							<div class="flex-text-inline" data-tooltip-content="{{if $.CanUserAcceptOrRejectReparent}}{{ctx.Locale.Tr "repo.reparent.accept_desc" $.RepoReparent.Doer.DisplayName $.RepoReparent.TargetParent.FullName}}{{else}}{{ctx.Locale.Tr "repo.reparent.no_permission_to_accept"}}{{end}}">
 								<button type="submit" class="ui compact small basic button {{if $.CanUserAcceptOrRejectReparent}}primary {{end}} ok small"{{if not $.CanUserAcceptOrRejectReparent}} disabled{{end}}>

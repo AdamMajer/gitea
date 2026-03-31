@@ -323,6 +323,8 @@ type TransferRepoOption struct {
 type ReparentRepoOption struct {
 	// required: true
 	NewParent string `json:"new_parent"`
+	// new name of the parent repository
+	NewName string `json:"new_name"`
 }
 
 // GitServiceType represents a git service
