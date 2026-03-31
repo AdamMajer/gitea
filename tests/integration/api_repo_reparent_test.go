@@ -50,10 +50,6 @@ func TestAPIRepoReparent(t *testing.T) {
 	assert.Equal(t, int64(0), targetRepo.ForkID)
 	assert.Equal(t, 1, targetRepo.NumForks)
 
-	// Test with a non-admin to see 202 Accepted
-	// Reset state first? No, let's use another pair if possible or just trust unit tests for the flow.
-	// Actually, let's use user13 (owner of fork) to request reparenting of user12's repo.
-
 	// Prepare another fork
 	// Repo 1 is user2/repo1. user4 forks it.
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
@@ -128,8 +124,6 @@ func TestAPIRepoReparentNoFork(t *testing.T) {
 func TestAPIRepoReparentPermissions(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
-	// user30/repo30 (ID 30 in repository.yml? No, let's check repo ID for user30)
-	// Actually, let's just use user2/repo1 (ID 1) again, it's safe because of PrepareTestEnv.
 	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
@@ -166,11 +160,7 @@ func TestAPIRepoReparentAlreadyExists(t *testing.T) {
 
 	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 
-	// user4 already has user4/repo1 (ID 3 in repository.yml? let's check)
-	// Actually user2/repo1 has ID 1. user4/repo1 is NOT in default fixtures?
-	// Let's use user2 and user1.
-	// user1 has user1/repo1 (which is ID 35 in fixtures? let's check)
-	// Better: create a repo for user4 with same name.
+	// Create a repo for user4 with same name.
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
 	session4 := loginUser(t, user4.Name)
 	token4 := getTokenForLoggedInUser(t, session4, auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteUser)

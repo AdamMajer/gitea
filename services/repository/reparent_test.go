@@ -19,8 +19,7 @@ func TestRepositoryReparent(t *testing.T) {
 	source := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
 	target := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11})
 
-	// Start reparent (target owner is same as source owner in this fixture? No, repo 10 is user12, 11 is user13? Let's check)
-	// Repo 10 owner is 12. Repo 11 owner is 13.
+	// Start reparent
 	targetOwner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
 
 	sourceAfter, err := StartRepositoryReparent(t.Context(), doer, source, targetOwner.ID)
