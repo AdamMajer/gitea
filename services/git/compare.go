@@ -83,7 +83,7 @@ func GetCompareInfo(ctx context.Context, baseRepo, headRepo *repo_model.Reposito
 	if !directComparison {
 		compareInfo.CompareBase, err = gitrepo.MergeBase(ctx, headRepo, compareInfo.BaseCommitID, compareInfo.HeadCommitID)
 		if err != nil && !errors.Is(err, util.ErrNotExist) {
-			return compareInfo, fmt.Errorf("MergeBase: %w", err)
+            compareInfo.CompareBase = compareInfo.BaseCommitID
 		}
 	} else {
 		compareInfo.CompareBase = compareInfo.BaseCommitID
