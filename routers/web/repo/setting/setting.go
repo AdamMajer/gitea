@@ -899,14 +899,14 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	}
 
 	if repo.Name != ctx.FormString("repo_name") {
-		ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_repo_name"), tplSettingsOptions, nil)
+		ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_repo_name"), tplSettingsOptions, nil)
 		return
 	}
 
 	newOwner, err := user_model.GetUserByName(ctx, ctx.FormString("new_owner_name"))
 	if err != nil {
 		if user_model.IsErrUserNotExist(err) {
-			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
 			return
 		}
 		ctx.ServerError("GetUserByName", err)
@@ -916,7 +916,7 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	if newOwner.Type == user_model.UserTypeOrganization {
 		if !ctx.Doer.IsAdmin && newOwner.Visibility == structs.VisibleTypePrivate && !organization.OrgFromUser(newOwner).HasMemberWithUserID(ctx, ctx.Doer.ID) {
 			// The user shouldn't know about this organization
-			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
 			return
 		}
 	}
@@ -935,7 +935,7 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	targetParent, err := repo_model.GetRepositoryByName(ctx, newOwner.ID, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoNotExist(err) {
-			ctx.RenderWithErr(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
+			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
 		} else {
 			ctx.ServerError("GetRepositoryByName", err)
 		}
@@ -945,9 +945,9 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, targetParent)
 	if err != nil {
 		if repo_model.IsErrRepoTransferInProgress(err) {
-			ctx.RenderWithErr(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)
+			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)
 		} else if repo_model.IsErrRepoAlreadyExist(err) {
-			ctx.RenderWithErr(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
+			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
 		} else {
 			ctx.ServerError("StartRepositoryReparent", err)
 		}
