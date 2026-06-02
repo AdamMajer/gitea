@@ -69,7 +69,6 @@ type RepoTransfer struct { //nolint:revive // export stutter
 	Recipient   *user_model.User `xorm:"-"`
 	RepoID      int64
 	Repo        *Repository `xorm:"-"`
-	TargetName  string
 	TeamIDs     []int64
 	Teams       []*organization.Team `xorm:"-"`
 
