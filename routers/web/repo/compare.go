@@ -592,6 +592,9 @@ func CompareDiff(ctx *context.Context) {
 	}
 
 	if ci.CompareBase != "" {
+		if ci.NoCommonMergeBase {
+			ctx.Flash.Error(ctx.Tr("repo.pulls.no_common_history"), true)
+		}
 		comparePageInfo.prepareCreatePullRequestPage(ctx)
 		if ctx.Written() {
 			return

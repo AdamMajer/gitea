@@ -33,6 +33,8 @@ type CompareInfo struct {
 
 	Commits  []*git.Commit
 	NumFiles int
+
+	NoCommonMergeBase bool
 }
 
 func (ci *CompareInfo) IsSameRepository() bool {
@@ -82,8 +84,12 @@ func GetCompareInfo(ctx context.Context, baseRepo, headRepo *repo_model.Reposito
 
 	if !directComparison {
 		compareInfo.CompareBase, err = gitrepo.MergeBase(ctx, headRepo, compareInfo.BaseCommitID, compareInfo.HeadCommitID)
-		if err != nil && !errors.Is(err, util.ErrNotExist) {
-            compareInfo.CompareBase = compareInfo.BaseCommitID
+		if err != nil {
+			if !errors.Is(err, util.ErrNotExist) {
+				return compareInfo, fmt.Errorf("MergeBase: %w", err)
+			}
+			compareInfo.CompareBase = compareInfo.BaseCommitID
+			compareInfo.NoCommonMergeBase = true
 		}
 	} else {
 		compareInfo.CompareBase = compareInfo.BaseCommitID

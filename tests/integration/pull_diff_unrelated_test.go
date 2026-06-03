@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	auth_model "code.gitea.io/gitea/models/auth"
-	repo_model "code.gitea.io/gitea/models/repo"
-	unittest "code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git/gitcmd"
-	api "code.gitea.io/gitea/modules/structs"
+	auth_model "gitea.dev/models/auth"
+	repo_model "gitea.dev/models/repo"
+	unittest "gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git/gitcmd"
+	api "gitea.dev/modules/structs"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"

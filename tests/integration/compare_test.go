@@ -156,7 +156,7 @@ Hello from 2
 	assert.Contains(t, body, "These branches do not share a common merge base")
 	assert.Equal(t, 1, htmlDoc.doc.Find(`a.item[href="/user2/repo1/compare/master...unrelated-history"]`).Length())
 	assert.Equal(t, 1, htmlDoc.doc.Find(`a.item[href="/user2/repo1/compare/master...master"]`).Length())
-	assert.Equal(t, 0, htmlDoc.doc.Find(".pullrequest-form").Length())
+	assert.Equal(t, 1, htmlDoc.doc.Find(".pullrequest-form").Length())
 }
 
 func TestCompareCodeExpand(t *testing.T) {
