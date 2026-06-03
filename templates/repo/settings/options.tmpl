@@ -972,10 +972,11 @@
 				<input type="hidden" name="action" value="reparent">
 				<div class="field">
 					<label>
-						{{ctx.Locale.Tr "repo.settings.transfer_form_title"}}
+						{{ctx.Locale.Tr "repo.settings.reparent_form_title"}}
 						<span class="tw-text-red">{{.Repository.Name}}</span>
 					</label>
 				</div>
+				{{template "repo/settings/repo_name_confirm_fields" (dict "RepoName" .Repository.Name)}}
 				<div class="field">
 					<label>{{ctx.Locale.Tr "repo.repo_name"}} ({{ctx.Locale.Tr "repo.settings.transfer_new_name"}})</label>
 					<input name="new_name" value="{{.Repository.Name}}">
