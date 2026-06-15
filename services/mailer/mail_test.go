@@ -589,3 +589,38 @@ func TestMailPullRequestPush(t *testing.T) {
 	assert.Contains(t, msgs[0].Body, `<a href="https://try.gitea.io/user2/repo1/commit/0000000000000000000000000000000000000000">0000000000</a> - test commit msg`)
 	assert.Contains(t, msgs[0].Body, `</html>`)
 }
+
+func TestSendRepoReparentNotifyMail(t *testing.T) {
+	assert.NoError(t, unittest.PrepareTestDatabase())
+
+	sender := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	recipient := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+
+	// Mock setting.MailService so SendRepoTransferNotifyMail runs
+	defer test.MockVariableValue(&setting.MailService, &setting.Mailer{From: "test@gitea.com"})()
+
+	// Capture sent messages
+	var sentMsgs []*sender_service.Message
+	defer test.MockVariableValue(&SendAsync, func(msgs ...*sender_service.Message) {
+		sentMsgs = append(sentMsgs, msgs...)
+	})()
+
+	// 1. Test standard repository transfer mail (IsReparent should be false)
+	repo.Status = repo_model.RepositoryReady
+	err := SendRepoTransferNotifyMail(t.Context(), sender, recipient, repo)
+	assert.NoError(t, err)
+	assert.Len(t, sentMsgs, 1)
+	assert.Contains(t, sentMsgs[0].Subject, "mail.repo.transfer.subject_to_you")
+	assert.Contains(t, sentMsgs[0].Body, "mail.repo.transfer.body")
+
+	sentMsgs = nil
+
+	// 2. Test reparenting transfer mail (IsReparent should be true since repo.Status is RepositoryPendingReparent)
+	repo.Status = repo_model.RepositoryPendingReparent
+	err = SendRepoTransferNotifyMail(t.Context(), sender, recipient, repo)
+	assert.NoError(t, err)
+	assert.Len(t, sentMsgs, 1)
+	assert.Contains(t, sentMsgs[0].Subject, "mail.repo.reparent.subject_to_you")
+	assert.Contains(t, sentMsgs[0].Body, "mail.repo.reparent.body")
+}

@@ -8,7 +8,11 @@
 {{$url := HTMLFormat "<a href='%[1]s'>%[2]s</a>" .Link .Repo}}
 <body>
 	<p>{{.Subject}}.
-		{{.locale.Tr "mail.repo.transfer.body" $url}}
+		{{if .IsReparent}}
+			{{.locale.Tr "mail.repo.reparent.body" $url}}
+		{{else}}
+			{{.locale.Tr "mail.repo.transfer.body" $url}}
+		{{end}}
 	</p>
 	<div style="font-size:small; color:#666;">
 		<p>
