@@ -86,6 +86,37 @@ func TestAPIRepoReparent(t *testing.T) {
 	assert.Equal(t, forkRes.ID, repo1.ForkID)
 }
 
+func TestAPIRepoReparentCoOwnership(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	// user2 (owner of repo1, which is public)
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session2 := loginUser(t, user2.Name)
+	token2 := getTokenForLoggedInUser(t, session2, auth_model.AccessTokenScopeWriteRepository)
+
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}) // org3 is an organization where user2 is an Owner
+
+	// user2 requests reparenting of user2/repo1 to org3
+	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
+		NewOwner: org3.Name,
+	}).AddTokenAuth(token2)
+	// Because user2 is owner of the source repo AND has rights to accept the transfer (co-ownership),
+	// this should be automatically accepted and return StatusOK.
+	MakeRequest(t, req, http.StatusOK)
+
+	// Verify database state: repo1 should be a fork now, and its status is RepositoryReady
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
+	assert.True(t, repo1.IsFork)
+	assert.NotEqual(t, int64(0), repo1.ForkID)
+
+	// Verify that the new parent (the created fork under org3) is NOT a fork
+	newParent := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo1.ForkID})
+	assert.False(t, newParent.IsFork)
+	assert.Equal(t, org3.ID, newParent.OwnerID)
+}
+
 func TestAPIRepoReparentNoFork(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 

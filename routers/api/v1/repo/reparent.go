@@ -83,8 +83,17 @@ func Reparent(ctx *context.APIContext) {
 		return
 	}
 
-	// Auto-accept ONLY if initiator is instance admin
-	if ctx.Doer.IsAdmin {
+	// Auto-accept if initiator is instance admin or has permission to accept the transfer (co-owner)
+	canAccept := ctx.Doer.IsAdmin
+	if !canAccept {
+		if transfer, err := repo_model.GetPendingRepositoryTransfer(ctx, repo); err == nil {
+			if transfer.CanUserAcceptTransfer(ctx, ctx.Doer) {
+				canAccept = true
+			}
+		}
+	}
+
+	if canAccept {
 		if err := repo_service.AcceptReparent(ctx, ctx.Doer, repo); err == nil {
 			ctx.JSON(http.StatusOK, convert.ToRepo(ctx, repo, ctx.Repo.Permission))
 			return
