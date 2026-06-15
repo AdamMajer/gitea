@@ -988,8 +988,17 @@ func handleSettingsPostReparent(ctx *context.Context) {
 
 	log.Trace("Repository reparent process was initiated: %s/%s -> %s", ctx.Repo.Owner.Name, repo.Name, newOwner.Name)
 
-	// Auto-accept ONLY if initiator is instance admin
-	if ctx.Doer.IsAdmin {
+	// Auto-accept if initiator is instance admin or has permission to accept the transfer (co-owner)
+	canAccept := ctx.Doer.IsAdmin
+	if !canAccept {
+		if transfer, err := repo_model.GetPendingRepositoryTransfer(ctx, repo); err == nil {
+			if transfer.CanUserAcceptTransfer(ctx, ctx.Doer) {
+				canAccept = true
+			}
+		}
+	}
+
+	if canAccept {
 		if err := repo_service.AcceptReparent(ctx, ctx.Doer, repo); err == nil {
 			ctx.Flash.Success(ctx.Tr("repo.reparent.success"))
 			ctx.Redirect(repo.Link())
