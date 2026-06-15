@@ -64,11 +64,21 @@ func sendRepoTransferNotifyMailPerLang(lang string, newOwner, doer *user_model.U
 		content bytes.Buffer
 	)
 
+	isReparent := repo.Status == repo_model.RepositoryPendingReparent
+
 	destination := locale.TrString("mail.repo.transfer.to_you")
-	subject := locale.TrString("mail.repo.transfer.subject_to_you", doer.DisplayName(), repo.FullName())
+	subjectKey := "mail.repo.transfer.subject_to_you"
+	if isReparent {
+		subjectKey = "mail.repo.reparent.subject_to_you"
+	}
+	subject := locale.TrString(subjectKey, doer.DisplayName(), repo.FullName())
 	if newOwner.IsOrganization() {
 		destination = newOwner.DisplayName()
-		subject = locale.TrString("mail.repo.transfer.subject_to", doer.DisplayName(), repo.FullName(), destination)
+		subjectKey = "mail.repo.transfer.subject_to"
+		if isReparent {
+			subjectKey = "mail.repo.reparent.subject_to"
+		}
+		subject = locale.TrString(subjectKey, doer.DisplayName(), repo.FullName(), destination)
 	}
 
 	data := map[string]any{
@@ -80,6 +90,7 @@ func sendRepoTransferNotifyMailPerLang(lang string, newOwner, doer *user_model.U
 		"Subject":     subject,
 		"Language":    locale.Language(),
 		"Destination": destination,
+		"IsReparent":  isReparent,
 	}
 
 	if err := LoadedTemplates().BodyTemplates.ExecuteTemplate(&content, string(mailRepoTransferNotify), data); err != nil {
