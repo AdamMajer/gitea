@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"gitea.dev/modules/log"
 	"gitea.dev/modules/json"
 
 	"gitea.com/go-chi/session"
@@ -159,17 +160,25 @@ func (s *VirtualStore) Release() error {
 	// Now need to lock the provider
 	s.p.lock.Lock()
 	defer s.p.lock.Unlock()
+
+	if s.released {
+		return nil
+	}
+
 	if len(s.data) > 0 {
 		// Now ensure that we don't exist!
 		realProvider := s.p.provider
 
-		if !s.released {
-			if exist, err := realProvider.Exist(s.sid); err == nil && exist {
-				// This is an error!
-				return fmt.Errorf("new sid '%s' already exists", s.sid)
-			} else if err != nil {
-				return fmt.Errorf("check if '%s' exist failed: %w", s.sid, err)
-			}
+		if exist, err := realProvider.Exist(s.sid); err == nil && exist {
+			// Two concurrent requests sharing the same session SID both created
+			// VirtualStores; the other request already committed to the real
+			// provider first. Discard our write rather than returning an error
+			// that would panic the Sessioner deferred release.
+			log.Warn("VirtualStore.Release: sid %q already exists, discarding concurrent write", s.sid)
+			s.released = true
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("check if '%s' exist failed: %w", s.sid, err)
 		}
 		realStore, err := realProvider.Read(s.sid)
 		if err != nil {
