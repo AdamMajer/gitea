@@ -99,7 +99,13 @@ func TestReparentService(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, reparent)
 
-	// Reject reparenting as user13 (owner of repo11)
+	// Reject reparenting as user2 (owner of repo1 - initiator cancellation)
+	assert.NoError(t, RejectReparent(ctx, user2, repo1))
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
+
+	// Start again and reject as user13 (owner of repo11)
+	assert.NoError(t, StartRepositoryReparent(ctx, user2, repo1, repo11, nil, ""))
 	assert.NoError(t, RejectReparent(ctx, user13, repo1))
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
