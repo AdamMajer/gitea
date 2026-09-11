@@ -71,6 +71,8 @@ func TestReparentService(t *testing.T) {
 	assert.Equal(t, repo2.ID, repo1.ForkID)
 	assert.False(t, repo2.IsFork)
 	assert.Equal(t, int64(0), repo2.ForkID)
+	assert.Equal(t, 1, repo1.NumForks)
+	assert.Equal(t, 1, repo2.NumForks)
 
 	// 4. Test swap pending when target exists:
 	// We reset repo2 to be a fork of repo1 again.
