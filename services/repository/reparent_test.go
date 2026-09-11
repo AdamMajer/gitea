@@ -6,10 +6,10 @@ package repository
 import (
 	"testing"
 
-	activities_model "gitea.dev/models/activities"
 	repo_model "gitea.dev/models/repo"
 	"gitea.dev/models/unittest"
 	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -147,60 +147,14 @@ func TestReparentService(t *testing.T) {
 	// Clean up newParentDirect
 	assert.NoError(t, DeleteRepositoryDirectly(ctx, newParentDirect.ID))
 
-	// 6. Test reverse fork pending when target does NOT exist:
+	// 6. Test reverse fork when target does NOT exist and user lacks permission:
 	// We reset repo1 to be root.
 	repo1.IsFork = false
 	repo1.ForkID = 0
 	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(ctx, repo1, "is_fork", "fork_id"))
 
 	// user2 reparents repo1 to point to a non-existent parent owned by user13 (user13.Name, "new-parent-pending").
-	// Since user2 is not an admin/owner of user13, this must be pending!
-	assert.NoError(t, StartRepositoryReparent(ctx, user2, repo1, nil, user13, "new-parent-pending"))
-
-	// Verify repo1 is locked (pending status)
-	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	assert.Equal(t, repo_model.RepositoryPendingReparent, repo1.Status)
-
-	// Verify new-parent-pending exists but is locked as RepositoryPendingReparent
-	newParentPending := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
-	assert.Equal(t, repo_model.RepositoryPendingReparent, newParentPending.Status)
-
-	reparent, err = repo_model.GetPendingReparentByRepo(ctx, repo1.ID)
-	assert.NoError(t, err)
-	assert.NotNil(t, reparent)
-	assert.Equal(t, newParentPending.ID, reparent.TargetParentID)
-
-	// Reject reparenting as user13 (owner of target)
-	assert.NoError(t, RejectReparent(ctx, user13, repo1))
-
-	// Verify repo1 is ready and new-parent-pending has been DELETED
-	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
-	unittest.AssertNotExistsBean(t, &repo_model.Repository{ID: newParentPending.ID})
-
-	// Start again and accept
-	assert.NoError(t, StartRepositoryReparent(ctx, user2, repo1, nil, user13, "new-parent-pending"))
-	newParentPending = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
-
-	assert.NoError(t, AcceptReparent(ctx, user13, repo1))
-
-	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	newParentPending = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: newParentPending.ID})
-
-	assert.True(t, repo1.IsFork)
-	assert.Equal(t, newParentPending.ID, repo1.ForkID)
-	assert.False(t, newParentPending.IsFork)
-	assert.Equal(t, int64(0), newParentPending.ForkID)
-	assert.Equal(t, repo_model.RepositoryReady, newParentPending.Status)
-
-	// Clean up newParentPending
-	assert.NoError(t, DeleteRepositoryDirectly(ctx, newParentPending.ID))
-
-	// Verify that the timeline action was created correctly
-	unittest.AssertExistsAndLoadBean(t, &activities_model.Action{
-		OpType:    activities_model.ActionReparentRepo,
-		ActUserID: 13,
-		RepoID:    1,
-		Content:   "user13/new-parent-pending",
-	})
+	// Since user2 is not an admin/owner of user13, this must be denied to prevent spam dummy repos!
+	err = StartRepositoryReparent(ctx, user2, repo1, nil, user13, "new-parent-pending")
+	assert.ErrorIs(t, err, util.ErrPermissionDenied)
 }
