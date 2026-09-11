@@ -54,6 +54,9 @@ func TestReparentService(t *testing.T) {
 	// Let's create a scenario where user2 owns both repo1 and another repo (repo2 ID 2).
 	// We make repo2 a fork of repo1 first.
 	repo2 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
+	repo2.IsPrivate = false // Ensure it is public to avoid visibility constraint failure
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(ctx, repo2, "is_private"))
+
 	assert.NoError(t, repo_model.ReparentToExistingParent(ctx, repo1.ID, repo2.ID, 0)) // repo2 becomes fork of repo1
 
 	repo2 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
@@ -157,4 +160,23 @@ func TestReparentService(t *testing.T) {
 	// Since user2 is not an admin/owner of user13, this must be denied to prevent spam dummy repos!
 	err = StartRepositoryReparent(ctx, user2, repo1, nil, user13, "new-parent-pending")
 	assert.ErrorIs(t, err, util.ErrPermissionDenied)
+
+	// 7. Test unauthorized reparenting to a private repository:
+	repoPrivate := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 31}) // This is a private repo owned by user22
+	user13 = unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+	repo11 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11}) // Owned by user13
+	
+	// user13 tries to reparent repo11 to repoPrivate (which they don't have access to)
+	err = StartRepositoryReparent(ctx, user13, repo11, repoPrivate, nil, "")
+	assert.ErrorIs(t, err, util.ErrPermissionDenied)
+
+	// 8. Test visibility constraint (public cannot fork private):
+	// Let's create a scenario where user2 reparents a public repo to a private repo they OWN
+	repoPublic := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}) // Owned by user2, public
+	repoPrivateOwned := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2, IsPrivate: true}) // We'll assume repo2 is or can be private. Let's just make it private.
+	repoPrivateOwned.IsPrivate = true
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(ctx, repoPrivateOwned, "is_private"))
+
+	err = StartRepositoryReparent(ctx, user2, repoPublic, repoPrivateOwned, nil, "")
+	assert.ErrorContains(t, err, "a public repository cannot be a fork of a private repository")
 }
