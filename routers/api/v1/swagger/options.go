@@ -100,6 +100,8 @@ type swaggerParameterBodies struct {
 	// in:body
 	TransferRepoOption api.TransferRepoOption
 	// in:body
+	ReparentRepoOption api.ReparentRepoOption
+	// in:body
 	CreateForkOption api.CreateForkOption
 	// in:body
 	GenerateRepoOption api.GenerateRepoOption

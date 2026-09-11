@@ -9439,6 +9439,25 @@
         "type": "object",
         "x-go-package": "gitea.dev/modules/structs"
       },
+      "ReparentRepoOption": {
+        "description": "ReparentRepoOption options when reparenting a repository",
+        "properties": {
+          "new_name": {
+            "description": "new name of the parent repository",
+            "type": "string",
+            "x-go-name": "NewName"
+          },
+          "new_parent": {
+            "type": "string",
+            "x-go-name": "NewParent"
+          }
+        },
+        "required": [
+          "new_parent"
+        ],
+        "type": "object",
+        "x-go-package": "gitea.dev/modules/structs"
+      },
       "RepoCollaboratorPermission": {
         "description": "RepoCollaboratorPermission to get repository permission for a collaborator",
         "properties": {
@@ -31383,6 +31402,144 @@
           }
         },
         "summary": "Edit a release attachment",
+        "tags": [
+          "repository"
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/reparent": {
+      "post": {
+        "operationId": "repoReparent",
+        "parameters": [
+          {
+            "description": "owner of the repo to be demoted to fork",
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "name of the repo to be demoted to fork",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReparentRepoOption"
+              }
+            }
+          },
+          "description": "Reparent Options",
+          "required": true,
+          "x-originalParamName": "body"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/Repository"
+          },
+          "202": {
+            "$ref": "#/components/responses/Repository"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/validationError"
+          }
+        },
+        "summary": "Reparent a repository",
+        "tags": [
+          "repository"
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/reparent/accept": {
+      "post": {
+        "operationId": "acceptRepoReparent",
+        "parameters": [
+          {
+            "description": "owner of the repo",
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "name of the repo",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Repository"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        },
+        "summary": "Accept a repo reparenting",
+        "tags": [
+          "repository"
+        ]
+      }
+    },
+    "/repos/{owner}/{repo}/reparent/reject": {
+      "post": {
+        "operationId": "rejectRepoReparent",
+        "parameters": [
+          {
+            "description": "owner of the repo",
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "name of the repo",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/Repository"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/notFound"
+          }
+        },
+        "summary": "Reject a repo reparenting",
         "tags": [
           "repository"
         ]
