@@ -199,7 +199,7 @@ func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return err
 		}
 
-		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) {
+		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) && source.OwnerID != doer.ID {
 			return util.ErrPermissionDenied
 		}
 
