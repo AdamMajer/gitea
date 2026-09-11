@@ -9,7 +9,10 @@ import (
 
 	"gitea.dev/models/db"
 	"gitea.dev/models/organization"
+	perm_model "gitea.dev/models/perm"
+	access_model "gitea.dev/models/perm/access"
 	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/log"
@@ -89,6 +92,18 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 
 	if err := target.LoadOwner(ctx); err != nil {
 		return err
+	}
+
+	// Verify that the initiator has read access to the target repository
+	if hasAccess, err := access_model.HasAccessUnit(ctx, doer, target, unit.TypeCode, perm_model.AccessModeRead); err != nil {
+		return err
+	} else if !hasAccess {
+		return util.ErrPermissionDenied
+	}
+
+	// Enforce visibility constraint: a public repository cannot be a fork of a private repository
+	if target.IsPrivate && !source.IsPrivate {
+		return fmt.Errorf("a public repository cannot be a fork of a private repository")
 	}
 
 	// Check if target is currently a fork of source (Swap relationship)
