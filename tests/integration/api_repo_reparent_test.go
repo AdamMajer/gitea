@@ -28,6 +28,10 @@ func TestAPIRepoReparent(t *testing.T) {
 
 	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	repo2 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
+	
+	// Make repo2 public to satisfy visibility constraints
+	repo2.IsPrivate = false
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(t.Context(), repo2, "is_private"))
 
 	// Start reparenting repo1 to become a fork of repo2
 	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{

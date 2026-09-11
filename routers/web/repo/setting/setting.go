@@ -1013,18 +1013,13 @@ func handleSettingsPostReparent(ctx *context.Context) {
 
 	log.Trace("Repository reparent process was initiated: %s/%s -> %s", ctx.Repo.Owner.Name, repo.Name, newOwner.Name)
 
-	// Auto-accept ONLY if initiator is instance admin
-	if ctx.Doer.IsAdmin {
-		if err := repo_service.AcceptReparent(ctx, ctx.Doer, repo); err == nil {
-			ctx.Flash.Success(ctx.Tr("repo.reparent.success"))
-			ctx.Redirect(repo.Link())
-			return
-		}
-		// If auto-accept fails, it stays pending
+	if repo.Status == repo_model.RepositoryPendingReparent {
+		ctx.Flash.Info(ctx.Tr("repo.settings.transfer_started", newOwner.DisplayName()))
+		ctx.Redirect(repo.Link() + "/settings")
+	} else {
+		ctx.Flash.Success(ctx.Tr("repo.reparent.success"))
+		ctx.Redirect(repo.Link())
 	}
-
-	ctx.Flash.Info(ctx.Tr("repo.settings.transfer_started", newOwner.DisplayName()))
-	ctx.Redirect(repo.Link() + "/settings")
 }
 
 func handleSettingsPostCancelReparent(ctx *context.Context) {
