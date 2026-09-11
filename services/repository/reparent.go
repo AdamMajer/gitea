@@ -8,15 +8,31 @@ import (
 	"fmt"
 
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	repo_model "gitea.dev/models/repo"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/globallock"
+	"gitea.dev/modules/log"
 	"gitea.dev/modules/util"
 	notify_service "gitea.dev/services/notify"
 )
 
+func isTargetAdmin(ctx context.Context, doer, targetOwner *user_model.User) (bool, error) {
+	if doer.IsAdmin {
+		return true, nil
+	}
+	if doer.ID == targetOwner.ID {
+		return true, nil
+	}
+	if targetOwner.IsOrganization() {
+		org := organization.OrgFromUser(targetOwner)
+		return org.IsOwnedBy(ctx, doer.ID)
+	}
+	return false, nil
+}
+
 // StartRepositoryReparent starts the reparenting process for a repository
-func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source, target *repo_model.Repository) error {
+func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source, target *repo_model.Repository, targetOwner *user_model.User, targetName string) error {
 	releaser, err := globallock.Lock(ctx, getRepoWorkingLockKey(source.ID))
 	if err != nil {
 		return fmt.Errorf("lock.Lock: %w", err)
@@ -27,31 +43,103 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 		return fmt.Errorf("repo is not ready, currently migrating")
 	}
 
-	// For reparenting, we always require acceptance unless the doer is admin and owner of both?
-	// Actually, the TODO says "use the same mechanism to ask the source repository if it should be reparented".
-	// So we always create a pending request if the doer is not the owner of the source.
 	if err := source.LoadOwner(ctx); err != nil {
 		return err
 	}
 
-	isDirect := false
-	if doer.IsAdmin || source.OwnerID == doer.ID {
-		isDirect = true
+	// The initiator must be owner of the current repository (or admin)
+	if !doer.IsAdmin && source.OwnerID != doer.ID {
+		return util.ErrPermissionDenied
 	}
 
-	if isDirect {
-		if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+	if target == nil {
+		// Target Parent does NOT exist: Create a reverse fork!
+		if targetOwner == nil || targetName == "" {
+			return fmt.Errorf("target owner and name must be specified when target does not exist")
+		}
+
+		// Check if doer is target admin
+		isDirect, err := isTargetAdmin(ctx, doer, targetOwner)
+		if err != nil {
 			return err
 		}
-		notify_service.ReparentRepository(ctx, doer, source, target)
+
+		if isDirect {
+			// Create the fork directly under targetOwner
+			target, err = ForkRepository(ctx, doer, targetOwner, ForkRepoOptions{
+				BaseRepo:    source,
+				Name:        targetName,
+				Description: source.Description,
+			})
+			if err != nil {
+				return err
+			}
+
+			if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+				return err
+			}
+
+			notify_service.ReparentRepository(ctx, doer, source, target)
+			return nil
+		}
+
+		// Create the fork as pending/locked under targetOwner
+		target, err = ForkRepository(ctx, doer, targetOwner, ForkRepoOptions{
+			BaseRepo:    source,
+			Name:        targetName,
+			Description: source.Description,
+		})
+		if err != nil {
+			return err
+		}
+
+		target.Status = repo_model.RepositoryPendingReparent
+		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, target, "status"); err != nil {
+			return err
+		}
+
+		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+			return err
+		}
+
+		notify_service.RepoPendingReparent(ctx, doer, source, target)
 		return nil
 	}
 
-	if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+	if err := target.LoadOwner(ctx); err != nil {
 		return err
 	}
 
-	notify_service.RepoPendingReparent(ctx, doer, source, target)
+	// Check if target is currently a fork of source (Swap relationship)
+	if target.ForkID == source.ID && target.IsFork {
+		isDirect := false
+		if doer.IsAdmin || (source.OwnerID == doer.ID && target.OwnerID == doer.ID) {
+			isDirect = true
+		}
+
+		if isDirect {
+			if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+				return err
+			}
+			notify_service.ReparentRepository(ctx, doer, source, target)
+			return nil
+		}
+
+		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+			return err
+		}
+
+		notify_service.RepoPendingReparent(ctx, doer, source, target)
+		return nil
+	}
+
+	// Standard Reparenting (target is not a fork of source)
+	// We reparent source to point to target as parent directly without target's approval
+	if err := repo_model.ReparentToExistingParent(ctx, target.ID, source.ID, source.ForkID); err != nil {
+		return err
+	}
+
+	notify_service.ReparentRepository(ctx, doer, source, target)
 	return nil
 }
 
@@ -79,6 +167,14 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return err
 		}
 
+		// Unlock target if it was pending
+		if targetRepo.Status == repo_model.RepositoryPendingReparent {
+			targetRepo.Status = repo_model.RepositoryReady
+			if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, targetRepo, "status"); err != nil {
+				return err
+			}
+		}
+
 		source.Status = repo_model.RepositoryReady
 		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
 			return err
@@ -95,7 +191,9 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 
 // RejectReparent rejects a reparenting request
 func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
-	return db.WithTx(ctx, func(ctx context.Context) error {
+	var targetRepoID int64
+
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
 		if err != nil {
 			return err
@@ -105,11 +203,26 @@ func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return util.ErrPermissionDenied
 		}
 
+		targetRepoID = reparent.TargetParentID
+
 		source.Status = repo_model.RepositoryReady
 		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
 			return err
 		}
 
 		return repo_model.DeleteReparent(ctx, source.ID)
-	})
+	}); err != nil {
+		return err
+	}
+
+	if targetRepoID > 0 {
+		targetRepo, err := repo_model.GetRepositoryByID(ctx, targetRepoID)
+		if err == nil && targetRepo.Status == repo_model.RepositoryPendingReparent {
+			if err := DeleteRepositoryDirectly(ctx, targetRepoID); err != nil {
+				log.Error("DeleteRepositoryDirectly: %v", err)
+			}
+		}
+	}
+
+	return nil
 }

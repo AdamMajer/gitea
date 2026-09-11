@@ -10,6 +10,7 @@ import (
 	"gitea.dev/models/perm"
 	access_model "gitea.dev/models/perm/access"
 	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/log"
 	api "gitea.dev/modules/structs"
 	"gitea.dev/modules/util"
@@ -55,7 +56,7 @@ func Reparent(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
-	opts := web.GetForm(ctx).(*api.ReparentRepoOption)
+	opts := web.GetForm[*api.ReparentRepoOption](ctx)
 
 	parentName := opts.NewName
 	if parentName == "" {
@@ -65,19 +66,29 @@ func Reparent(ctx *context.APIContext) {
 	targetParent, err := repo_model.GetRepositoryByOwnerAndName(ctx, opts.NewParent, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoNotExist(err) {
-			ctx.APIError(http.StatusNotFound, "The new parent repository does not exist")
+			targetParent = nil
+		} else {
+			ctx.APIErrorInternal(err)
+			return
+		}
+	}
+
+	targetOwner, err := user_model.GetUserByName(ctx, opts.NewParent)
+	if err != nil {
+		if user_model.IsErrUserNotExist(err) {
+			ctx.APIError(http.StatusNotFound, "The target owner does not exist")
 			return
 		}
 		ctx.APIErrorInternal(err)
 		return
 	}
 
-	if err := repo_service.StartRepositoryReparent(ctx, ctx.Doer, ctx.Repo.Repository, targetParent); err != nil {
+	if err := repo_service.StartRepositoryReparent(ctx, ctx.Doer, ctx.Repo.Repository, targetParent, targetOwner, parentName); err != nil {
 		switch {
 		case repo_model.IsErrRepoReparentInProgress(err):
-			ctx.APIError(http.StatusConflict, err)
+			ctx.APIError(http.StatusConflict, err.Error())
 		case repo_model.IsErrRepoAlreadyExist(err):
-			ctx.APIError(http.StatusConflict, err)
+			ctx.APIError(http.StatusConflict, err.Error())
 		default:
 			ctx.APIErrorInternal(err)
 		}
@@ -124,9 +135,9 @@ func AcceptReparent(ctx *context.APIContext) {
 	if err != nil {
 		switch {
 		case repo_model.IsErrNoPendingReparent(err):
-			ctx.APIError(http.StatusNotFound, err)
+			ctx.APIError(http.StatusNotFound, err.Error())
 		case errors.Is(err, util.ErrPermissionDenied):
-			ctx.APIError(http.StatusForbidden, err)
+			ctx.APIError(http.StatusForbidden, err.Error())
 		default:
 			ctx.APIErrorInternal(err)
 		}
@@ -166,9 +177,9 @@ func RejectReparent(ctx *context.APIContext) {
 	if err != nil {
 		switch {
 		case repo_model.IsErrNoPendingReparent(err):
-			ctx.APIError(http.StatusNotFound, err)
+			ctx.APIError(http.StatusNotFound, err.Error())
 		case errors.Is(err, util.ErrPermissionDenied):
-			ctx.APIError(http.StatusForbidden, err)
+			ctx.APIError(http.StatusForbidden, err.Error())
 		default:
 			ctx.APIErrorInternal(err)
 		}

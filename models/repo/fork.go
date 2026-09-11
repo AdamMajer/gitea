@@ -114,3 +114,26 @@ func ReparentFork(ctx context.Context, forkedRepoID, srcForkID int64) error {
 		return nil
 	})
 }
+
+// ReparentToExistingParent registers forkID as a fork of parentID and adjusts fork counts
+func ReparentToExistingParent(ctx context.Context, parentID, forkID, oldParentID int64) error {
+	return db.WithTx(ctx, func(ctx context.Context) error {
+		// Update fork
+		if _, err := db.GetEngine(ctx).Table("repository").ID(forkID).Cols("fork_id", "is_fork").Update(&Repository{ForkID: parentID, IsFork: true}); err != nil {
+			return err
+		}
+		// Increment new parent's fork count
+		if parentID > 0 {
+			if _, err := db.GetEngine(ctx).Exec("UPDATE `repository` SET num_forks=num_forks+1 WHERE id=?", parentID); err != nil {
+				return err
+			}
+		}
+		// Decrement old parent's fork count
+		if oldParentID > 0 {
+			if _, err := db.GetEngine(ctx).Exec("UPDATE `repository` SET num_forks=num_forks-1 WHERE id=?", oldParentID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
