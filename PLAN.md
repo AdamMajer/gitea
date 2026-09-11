@@ -2,7 +2,7 @@
 
 This document outlines the necessary fixes for the "Repository Reparenting" pull request, addressing critical bugs, race conditions, and minor cleanup tasks.
 
-## 1. Fix Swagger/OpenAPI Generation Failure
+## 1. Fix Swagger/OpenAPI Generation Failure (Completed)
 The build currently fails on `make generate-swagger` because the newly added `ReparentRepoOption` struct is not correctly resolved in the OpenAPI 3 generation step, and `CreateForkOption` was incorrectly modified in the generated swagger.
 
 *   **Action:** 
