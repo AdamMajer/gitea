@@ -992,14 +992,14 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	targetParent, err := repo_model.GetRepositoryByName(ctx, newOwner.ID, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoNotExist(err) {
-			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
+			targetParent = nil
 		} else {
 			ctx.ServerError("GetRepositoryByName", err)
+			return
 		}
-		return
 	}
 
-	err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, targetParent)
+	err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, targetParent, newOwner, parentName)
 	if err != nil {
 		if repo_model.IsErrRepoTransferInProgress(err) {
 			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)

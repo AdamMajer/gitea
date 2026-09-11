@@ -126,21 +126,19 @@ func (r *RepoReparent) LoadAttributes(ctx context.Context) error {
 }
 
 // CanUserAcceptOrRejectReparent checks if the user has the rights to accept/decline a repo reparenting.
-// The user must be the owner of the source repository (or admin of the org).
+// The user must be the owner of the target repository (or admin of the org).
 func (r *RepoReparent) CanUserAcceptOrRejectReparent(ctx context.Context, u *user_model.User) bool {
-	if err := r.LoadSourceRepo(ctx); err != nil {
-		log.Error("LoadSourceRepo: %v", err)
+	if err := r.LoadTargetParent(ctx); err != nil {
+		log.Error("LoadTargetParent: %v", err)
 		return false
 	}
 
-	// Check if user has admin/owner permission on the source repo
-	// We'll use the repository's LoadOwner and check permissions.
-	if err := r.SourceRepo.LoadOwner(ctx); err != nil {
+	if err := r.TargetParent.LoadOwner(ctx); err != nil {
 		log.Error("LoadOwner: %v", err)
 		return false
 	}
 
-	if r.SourceRepo.OwnerID == u.ID {
+	if r.TargetParent.OwnerID == u.ID {
 		return true
 	}
 

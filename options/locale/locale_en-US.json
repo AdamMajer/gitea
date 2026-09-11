@@ -1077,6 +1077,7 @@
   "repo.reparent.no_permission_to_reject": "You do not have permission to reject this reparenting request.",
   "repo.reparent.success": "The repository has been reparented successfully.",
   "repo.reparent.rejected": "The reparenting request has been cancelled.",
+  "repo.reparent.parent_not_exist": "The proposed new parent repository does not exist under that owner.",
   "repo.desc.private": "Private",
   "repo.desc.public": "Public",
   "repo.desc.public_access": "Public Access",
