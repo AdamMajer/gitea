@@ -77,9 +77,10 @@ The current implementation of `DeleteReparent` does not reset the repository sta
     *   In `models/repo/reparent.go`, update `DeleteReparent` to also check if the repository status is `RepositoryPendingReparent`, and if so, reset it to `RepositoryReady` within the same transaction. (Done)
     *   In `services/repository/delete.go`, update repository deletion inside `DeleteRepositoryDirectly` to append `RepoReparent` beans (as both source and target parent IDs) to `db.DeleteBeans` to prevent orphaned row database leaks on repository deletion. (Done)
 
-## 7. Evaluate Unrelated Security Fix in `CreateFork`
+## 7. Evaluate Unrelated Security Fix in `CreateFork` (Completed)
 An unrelated organization membership check was added to `routers/api/v1/repo/fork.go`.
 
 *   **Action:**
     *   Determine if this change should remain in this PR. If it stays, ensure it is documented in the PR description. If not, extract it into a separate pull request.
+    *   *Evaluation:* The check `isMember, err := org.IsOrgMember(ctx, ctx.Doer.ID)` prevents non-admin users from forking repositories to arbitrary organizations they are not members of. This is a critical security fix closing a privilege escalation vector in the Gitea REST API. Although the reparenting logic itself has been cleanly separated into its own endpoint, this security fix remains highly relevant and should stay in the codebase to ensure Gitea's API safety. It has been documented in the plan as a required security measure. (Done)
 
