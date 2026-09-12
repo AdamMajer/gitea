@@ -15,18 +15,13 @@ The build currently fails on `make generate-swagger` because the newly added `Re
     *   Run `make generate-swagger` to successfully generate both `v1-swagger.generated.json` and `v1-openapi3.generated.json`.
     *   Commit the clean, successfully generated files without the unexpected `reparent: boolean` field in `CreateForkOption` (unless that was intentionally added to `structs`, in which case it needs to be added to the Go code).
 
-## 2. Implement Database Migration
+## 2. Implement Database Migration (Completed)
 Although `db.RegisterModel(new(RepoReparent))` makes the ORM aware of the model, Gitea requires an explicit schema migration step for upgrades to maintain database versioning strictness.
 
 *   **Action:**
-    *   Create a new file `modelmigration/v28/add_repo_reparent.go`.
-    *   Define a struct that mirrors the schema of `RepoReparent` (e.g., `RepoReparent struct { ... }`).
-    *   Write a function `AddRepoReparentTable(x *xorm.Engine) error` that calls `x.Sync(new(RepoReparent))`.
-    *   In `modelmigration/migrations.go`, append a new migration step to `prepareMigrationTasks()`:
-        ```go
-        newMigration(350, "Add RepoReparent table", v28.AddRepoReparentTable),
-        ```
-        *(Note: Increment the ID number based on the last migration ID in the file).*
+    *   Create a new file `modelmigration/v28/v354.go` with a frozen local-only definition of `RepoReparent` (Done).
+    *   Write the migration function `AddRepoReparentTable(ctx context.Context, x base.EngineMigration) error` (Done).
+    *   In `modelmigration/migrations.go`, append the new migration task with the next sequential ID, `354` (Done).
 
 ## 3. Fix Race Conditions (Missing Global Locks) (Completed)
 The `StartRepositoryReparent` function correctly acquires a global lock to prevent race conditions during reparenting. However, `AcceptReparent` and `RejectReparent` modify the repository status and fork relationships without this lock.
