@@ -70,11 +70,12 @@ In `models/repo/transfer.go`, a `TargetName string` field was added to the `Repo
 *   **Action:**
     *   Remove the `TargetName` field from `models/repo/transfer.go` to keep the code clean and prevent confusion. (Done)
 
-## 6. Improve `DeleteReparent` State Cleanup
+## 6. Improve `DeleteReparent` State Cleanup (Completed)
 The current implementation of `DeleteReparent` does not reset the repository status, meaning if it's called outside of the strict `AcceptReparent` or `RejectReparent` flow, the repo could get stuck in `RepositoryPendingReparent`.
 
 *   **Action:**
-    *   In `models/repo/reparent.go`, update `DeleteReparent` to also check if the repository status is `RepositoryPendingReparent`, and if so, reset it to `RepositoryReady` within the same transaction. Alternatively, ensure this logic is robustly handled in the service layer (this is already partially done in `Accept/Reject`, but should be verified for completeness).
+    *   In `models/repo/reparent.go`, update `DeleteReparent` to also check if the repository status is `RepositoryPendingReparent`, and if so, reset it to `RepositoryReady` within the same transaction. (Done)
+    *   In `services/repository/delete.go`, update repository deletion inside `DeleteRepositoryDirectly` to append `RepoReparent` beans (as both source and target parent IDs) to `db.DeleteBeans` to prevent orphaned row database leaks on repository deletion. (Done)
 
 ## 7. Evaluate Unrelated Security Fix in `CreateFork`
 An unrelated organization membership check was added to `routers/api/v1/repo/fork.go`.
@@ -82,6 +83,3 @@ An unrelated organization membership check was added to `routers/api/v1/repo/for
 *   **Action:**
     *   Determine if this change should remain in this PR. If it stays, ensure it is documented in the PR description. If not, extract it into a separate pull request.
 
-## 8. Final Validation
-*   Run the test suite (`make test`) to ensure all existing and new tests pass.
-*   Verify the application compiles and starts successfully (`make build`).

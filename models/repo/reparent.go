@@ -167,10 +167,24 @@ func IsReparentExist(ctx context.Context, repoID int64) (bool, error) {
 	return db.GetEngine(ctx).Where("source_repo_id = ?", repoID).Exist(new(RepoReparent))
 }
 
-// DeleteReparent deletes a reparenting request
+// DeleteReparent deletes a reparenting request and resets repository status if needed
 func DeleteReparent(ctx context.Context, repoID int64) error {
-	_, err := db.GetEngine(ctx).Where("source_repo_id = ?", repoID).Delete(&RepoReparent{})
-	return err
+	return db.WithTx(ctx, func(ctx context.Context) error {
+		repo, err := GetRepositoryByID(ctx, repoID)
+		if err != nil {
+			if !IsErrRepoNotExist(err) {
+				return err
+			}
+		} else if repo.Status == RepositoryPendingReparent {
+			repo.Status = RepositoryReady
+			if err := UpdateRepositoryColsNoAutoTime(ctx, repo, "status"); err != nil {
+				return err
+			}
+		}
+
+		_, err = db.GetEngine(ctx).Where("source_repo_id = ?", repoID).Delete(&RepoReparent{})
+		return err
+	})
 }
 
 // CreatePendingReparent marks the repository reparenting as "pending"
