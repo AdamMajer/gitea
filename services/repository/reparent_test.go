@@ -4,11 +4,13 @@
 package repository
 
 import (
+	"context"
 	"testing"
 
 	repo_model "gitea.dev/models/repo"
 	"gitea.dev/models/unittest"
 	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/globallock"
 	"gitea.dev/modules/util"
 	"github.com/stretchr/testify/assert"
 )
@@ -179,4 +181,57 @@ func TestReparentService(t *testing.T) {
 
 	err = StartRepositoryReparent(ctx, user2, repoPublic, repoPrivateOwned, nil, "")
 	assert.ErrorContains(t, err, "a public repository cannot be a fork of a private repository")
+}
+
+func TestReparentServiceGlobalLock(t *testing.T) {
+	assert.NoError(t, unittest.PrepareTestDatabase())
+
+	ctx := t.Context()
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	user13 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})   // Owned by user2 (ID 2)
+	repo11 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11}) // Owned by user13 (ID 13)
+
+	// Ensure clean slate
+	repo1.Status = repo_model.RepositoryReady
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(ctx, repo1, "status"))
+
+	// Create a pending reparent scenario
+	assert.NoError(t, repo_model.ReparentToExistingParent(ctx, repo1.ID, repo11.ID, repo11.ForkID))
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	repo11 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11})
+	assert.NoError(t, StartRepositoryReparent(ctx, user2, repo1, repo11, nil, ""))
+
+	// 1. Test AcceptReparent lock acquisition
+	// We manually acquire the lock on repo1 (the source repo)
+	lockKey := getRepoWorkingLockKey(repo1.ID)
+	releaser, err := globallock.Lock(ctx, lockKey)
+	assert.NoError(t, err)
+
+	// Try to accept reparenting with a brief/canceled context; it should fail or block on the lock, returning an error containing "lock.Lock"
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancel() // Cancel immediately
+
+	err = AcceptReparent(cancelCtx, user13, repo1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "lock.Lock")
+
+	// Release the lock
+	releaser()
+
+	// 2. Test RejectReparent lock acquisition
+	// Manually acquire the lock again
+	releaser, err = globallock.Lock(ctx, lockKey)
+	assert.NoError(t, err)
+
+	// Try to reject reparenting with a canceled context; it should fail on the lock, returning an error containing "lock.Lock"
+	cancelCtx2, cancel2 := context.WithCancel(ctx)
+	cancel2() // Cancel immediately
+
+	err = RejectReparent(cancelCtx2, user2, repo1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "lock.Lock")
+
+	// Release the lock
+	releaser()
 }

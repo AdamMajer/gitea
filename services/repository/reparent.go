@@ -141,6 +141,12 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 
 // AcceptReparent accepts a reparenting request
 func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
+	releaser, err := globallock.Lock(ctx, getRepoWorkingLockKey(source.ID))
+	if err != nil {
+		return fmt.Errorf("lock.Lock: %w", err)
+	}
+	defer releaser()
+
 	var targetRepo *repo_model.Repository
 
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
@@ -187,6 +193,12 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 
 // RejectReparent rejects a reparenting request
 func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_model.Repository) error {
+	releaser, err := globallock.Lock(ctx, getRepoWorkingLockKey(source.ID))
+	if err != nil {
+		return fmt.Errorf("lock.Lock: %w", err)
+	}
+	defer releaser()
+
 	var targetRepoID int64
 
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
