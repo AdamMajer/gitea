@@ -45,12 +45,19 @@ func TestRepoReparent(t *testing.T) {
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 	assert.False(t, reparent.CanUserAcceptOrRejectReparent(ctx, user5))
 
+	// Verify repo1 status is RepositoryPendingReparent before deletion
+	repo1, err = GetRepositoryByID(ctx, repo1.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, RepositoryPendingReparent, repo1.Status)
+
 	// Delete reparent
 	assert.NoError(t, DeleteReparent(ctx, repo1.ID))
 	_, err = GetPendingReparentByRepo(ctx, repo1.ID)
 	assert.Error(t, err)
 	assert.True(t, IsErrNoPendingReparent(err))
 
-	// Repo status should be back to ready after deletion (actually in my implementation of DeleteReparent I didn't change status back,
-	// because it should be done in service level or manually. Wait, I should probably check if status needs manual reset)
+	// Repo status should be back to ready after deletion
+	repo1, err = GetRepositoryByID(ctx, repo1.ID)
+	assert.NoError(t, err)
+	assert.Equal(t, RepositoryReady, repo1.Status)
 }
