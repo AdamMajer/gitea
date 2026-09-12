@@ -2,6 +2,10 @@
 
 This document outlines the necessary fixes for the "Repository Reparenting" pull request, addressing critical bugs, race conditions, and minor cleanup tasks.
 
+## General Guidelines
+*   **Always use TDD** when implementing points. Write a failing test first to reproduce/define the behavior, verify its failure, then implement the fix, and ensure the test passes.
+*   **Always use `make`** when running tests or compiling instead of using `go` directly.
+
 ## 1. Fix Swagger/OpenAPI Generation Failure (Completed)
 The build currently fails on `make generate-swagger` because the newly added `ReparentRepoOption` struct is not correctly resolved in the OpenAPI 3 generation step, and `CreateForkOption` was incorrectly modified in the generated swagger.
 
@@ -24,7 +28,7 @@ Although `db.RegisterModel(new(RepoReparent))` makes the ORM aware of the model,
         ```
         *(Note: Increment the ID number based on the last migration ID in the file).*
 
-## 3. Fix Race Conditions (Missing Global Locks)
+## 3. Fix Race Conditions (Missing Global Locks) (Completed)
 The `StartRepositoryReparent` function correctly acquires a global lock to prevent race conditions during reparenting. However, `AcceptReparent` and `RejectReparent` modify the repository status and fork relationships without this lock.
 
 *   **Action:**
@@ -43,11 +47,11 @@ The `StartRepositoryReparent` function performs multiple database operations (e.
 *   **Action:**
     *   In `services/repository/reparent.go`, modify `StartRepositoryReparent` to wrap the core logic that performs multiple database writes inside a `db.WithTx(ctx, func(ctx context.Context) error { ... })` block to ensure atomicity.
 
-## 5. Clean up Unused `TargetName` in `RepoTransfer`
+## 5. Clean up Unused `TargetName` in `RepoTransfer` (Completed)
 In `models/repo/transfer.go`, a `TargetName string` field was added to the `RepoTransfer` struct but is unused.
 
 *   **Action:**
-    *   Remove the `TargetName` field from `models/repo/transfer.go` to keep the code clean and prevent confusion.
+    *   Remove the `TargetName` field from `models/repo/transfer.go` to keep the code clean and prevent confusion. (Done)
 
 ## 6. Improve `DeleteReparent` State Cleanup
 The current implementation of `DeleteReparent` does not reset the repository status, meaning if it's called outside of the strict `AcceptReparent` or `RejectReparent` flow, the repo could get stuck in `RepositoryPendingReparent`.
