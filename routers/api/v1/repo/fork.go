@@ -6,7 +6,6 @@ package repo
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 
 	"gitea.dev/models/organization"
@@ -160,16 +159,6 @@ func CreateFork(ctx *context.APIContext) {
 			return
 		}
 		forkOwner = org.AsUser()
-		if !ctx.Doer.IsAdmin {
-			isMember, err := org.IsOrgMember(ctx, ctx.Doer.ID)
-			if err != nil {
-				ctx.APIErrorInternal(err)
-				return
-			} else if !isMember {
-				ctx.APIError(http.StatusForbidden, fmt.Sprintf("User is no Member of Organisation '%s'", org.Name))
-				return
-			}
-		}
 	}
 
 	fork, err := repo_service.ForkRepository(ctx, ctx.Doer, forkOwner, repo_service.ForkRepoOptions{
