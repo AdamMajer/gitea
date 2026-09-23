@@ -265,3 +265,12 @@ func (ns *notificationService) RepoPendingTransfer(ctx context.Context, doer, ne
 		log.Error("CreateRepoTransferNotification: %v", err)
 	}
 }
+
+func (ns *notificationService) RepoPendingReparent(ctx context.Context, doer, targetOwner *user_model.User, repo, target *repo_model.Repository) {
+	err := db.WithTx(ctx, func(ctx context.Context) error {
+		return activities_model.CreateRepoTransferNotification(ctx, doer, targetOwner, repo)
+	})
+	if err != nil {
+		log.Error("CreateRepoTransferNotification: %v", err)
+	}
+}

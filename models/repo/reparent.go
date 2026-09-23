@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gitea.dev/models/db"
 	"gitea.dev/models/organization"
@@ -65,8 +66,11 @@ type RepoReparent struct {
 	Doer           *user_model.User `xorm:"-"`
 	SourceRepoID   int64            `xorm:"UNIQUE(s) INDEX"` // The repo to be demoted to a fork
 	SourceRepo     *Repository      `xorm:"-"`
-	TargetParentID int64            `xorm:"INDEX"` // The fork that will become the parent
+	TargetParentID int64            `xorm:"INDEX"`
 	TargetParent   *Repository      `xorm:"-"`
+	TargetOwnerID  int64            `xorm:"INDEX"`
+	TargetOwner    *user_model.User `xorm:"-"`
+	TargetRepoName string           `xorm:"VARCHAR(255)"`
 
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX NOT NULL created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"INDEX NOT NULL updated"`
@@ -88,13 +92,38 @@ func (r *RepoReparent) LoadSourceRepo(ctx context.Context) error {
 	return nil
 }
 
-func (r *RepoReparent) LoadTargetParent(ctx context.Context) error {
-	if r.TargetParent == nil {
-		repo, err := GetRepositoryByID(ctx, r.TargetParentID)
+func (r *RepoReparent) LoadTargetOwner(ctx context.Context) error {
+	if r.TargetOwner == nil && r.TargetOwnerID > 0 {
+		u, err := user_model.GetUserByID(ctx, r.TargetOwnerID)
 		if err != nil {
 			return err
 		}
-		r.TargetParent = repo
+		r.TargetOwner = u
+	}
+
+	return nil
+}
+
+func (r *RepoReparent) LoadTargetParent(ctx context.Context) error {
+	if r.TargetParent == nil {
+		if r.TargetParentID > 0 {
+			repo, err := GetRepositoryByID(ctx, r.TargetParentID)
+			if err != nil {
+				return err
+			}
+			r.TargetParent = repo
+		} else if r.TargetOwnerID > 0 {
+			if err := r.LoadTargetOwner(ctx); err != nil {
+				return err
+			}
+			r.TargetParent = &Repository{
+				OwnerID:   r.TargetOwnerID,
+				Owner:     r.TargetOwner,
+				OwnerName: r.TargetOwner.Name,
+				Name:      r.TargetRepoName,
+				LowerName: strings.ToLower(r.TargetRepoName),
+			}
+		}
 	}
 
 	return nil
@@ -115,6 +144,9 @@ func (r *RepoReparent) LoadDoer(ctx context.Context) error {
 // LoadAttributes fetches all related attributes from the database
 func (r *RepoReparent) LoadAttributes(ctx context.Context) error {
 	if err := r.LoadSourceRepo(ctx); err != nil {
+		return err
+	}
+	if err := r.LoadTargetOwner(ctx); err != nil {
 		return err
 	}
 	if err := r.LoadTargetParent(ctx); err != nil {
@@ -234,7 +266,7 @@ func DeleteReparent(ctx context.Context, repoID int64) error {
 }
 
 // CreatePendingReparent marks the repository reparenting as "pending"
-func CreatePendingReparent(ctx context.Context, doer *user_model.User, sourceID, targetID int64) error {
+func CreatePendingReparent(ctx context.Context, doer *user_model.User, sourceID, targetID, targetOwnerID int64, targetRepoName string) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		source, err := GetRepositoryByID(ctx, sourceID)
 		if err != nil {
@@ -269,6 +301,8 @@ func CreatePendingReparent(ctx context.Context, doer *user_model.User, sourceID,
 			DoerID:         doer.ID,
 			SourceRepoID:   source.ID,
 			TargetParentID: targetID,
+			TargetOwnerID:  targetOwnerID,
+			TargetRepoName: targetRepoName,
 			CreatedUnix:    timeutil.TimeStampNow(),
 			UpdatedUnix:    timeutil.TimeStampNow(),
 		}

@@ -16,6 +16,8 @@ func AddRepoReparentTable(_ context.Context, x base.EngineMigration) error {
 		DoerID         int64
 		SourceRepoID   int64 `xorm:"UNIQUE(s) INDEX"`
 		TargetParentID int64 `xorm:"INDEX"`
+		TargetOwnerID  int64 `xorm:"INDEX"`
+		TargetRepoName string `xorm:"VARCHAR(255)"`
 
 		CreatedUnix timeutil.TimeStamp `xorm:"INDEX NOT NULL created"`
 		UpdatedUnix timeutil.TimeStamp `xorm:"INDEX NOT NULL updated"`

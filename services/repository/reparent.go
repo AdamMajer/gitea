@@ -15,7 +15,6 @@ import (
 	"gitea.dev/models/unit"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/globallock"
-	"gitea.dev/modules/log"
 	"gitea.dev/modules/util"
 	notify_service "gitea.dev/services/notify"
 )
@@ -86,26 +85,23 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 			return nil
 		}
 
-		// Create the fork as pending/locked under targetOwner
-		target, err = ForkRepository(ctx, doer, targetOwner, ForkRepoOptions{
-			BaseRepo:    source,
-			Name:        targetName,
-			Description: source.Description,
-		})
+		exist, err := repo_model.IsRepositoryModelExist(ctx, targetOwner, targetName)
 		if err != nil {
 			return err
 		}
-
-		target.Status = repo_model.RepositoryPendingReparent
-		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, target, "status"); err != nil {
-			return err
+		if exist {
+			return repo_model.ErrRepoAlreadyExist{
+				Uname: targetOwner.Name,
+				Name:  targetName,
+			}
 		}
 
-		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, 0, targetOwner.ID, targetName); err != nil {
 			return err
 		}
+		source.Status = repo_model.RepositoryPendingReparent
 
-		notify_service.RepoPendingReparent(ctx, doer, source, target)
+		notify_service.RepoPendingReparent(ctx, doer, targetOwner, source, nil)
 		return nil
 	}
 
@@ -140,11 +136,12 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 			return nil
 		}
 
-		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID, target.OwnerID, target.Name); err != nil {
 			return err
 		}
+		source.Status = repo_model.RepositoryPendingReparent
 
-		notify_service.RepoPendingReparent(ctx, doer, source, target)
+		notify_service.RepoPendingReparent(ctx, doer, target.Owner, source, target)
 		return nil
 	}
 
@@ -166,44 +163,73 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 	}
 	defer releaser()
 
+	reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
+	if err != nil {
+		return err
+	}
+
+	if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) {
+		return util.ErrPermissionDenied
+	}
+
 	var targetRepo *repo_model.Repository
 
-	if err := db.WithTx(ctx, func(ctx context.Context) error {
-		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
+	if reparent.TargetParentID > 0 {
+		targetRepo, err = repo_model.GetRepositoryByID(ctx, reparent.TargetParentID)
 		if err != nil {
 			return err
 		}
 
-		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) {
-			return util.ErrPermissionDenied
-		}
-
-		var errGet error
-		targetRepo, errGet = repo_model.GetRepositoryByID(ctx, reparent.TargetParentID)
-		if errGet != nil {
-			return errGet
-		}
-
-		if err := repo_model.ReparentFork(ctx, reparent.TargetParentID, source.ID); err != nil {
-			return err
-		}
-
-		// Unlock target if it was pending
-		if targetRepo.Status == repo_model.RepositoryPendingReparent {
-			targetRepo.Status = repo_model.RepositoryReady
-			if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, targetRepo, "status"); err != nil {
+		if err := db.WithTx(ctx, func(ctx context.Context) error {
+			if err := repo_model.ReparentFork(ctx, reparent.TargetParentID, source.ID); err != nil {
 				return err
 			}
-		}
 
-		source.Status = repo_model.RepositoryReady
-		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
+			// Unlock target if it was pending
+			if targetRepo.Status == repo_model.RepositoryPendingReparent {
+				targetRepo.Status = repo_model.RepositoryReady
+				if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, targetRepo, "status"); err != nil {
+					return err
+				}
+			}
+
+			source.Status = repo_model.RepositoryReady
+			if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
+				return err
+			}
+
+			return repo_model.DeleteReparent(ctx, source.ID)
+		}); err != nil {
+			return err
+		}
+	} else {
+		if err := reparent.LoadTargetOwner(ctx); err != nil {
 			return err
 		}
 
-		return repo_model.DeleteReparent(ctx, source.ID)
-	}); err != nil {
-		return err
+		targetRepo, err = ForkRepository(ctx, doer, reparent.TargetOwner, ForkRepoOptions{
+			BaseRepo:    source,
+			Name:        reparent.TargetRepoName,
+			Description: source.Description,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := db.WithTx(ctx, func(ctx context.Context) error {
+			if err := repo_model.ReparentFork(ctx, targetRepo.ID, source.ID); err != nil {
+				return err
+			}
+
+			source.Status = repo_model.RepositoryReady
+			if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
+				return err
+			}
+
+			return repo_model.DeleteReparent(ctx, source.ID)
+		}); err != nil {
+			return err
+		}
 	}
 
 	notify_service.ReparentRepository(ctx, doer, source, targetRepo)
@@ -218,9 +244,7 @@ func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 	}
 	defer releaser()
 
-	var targetRepoID int64
-
-	if err := db.WithTx(ctx, func(ctx context.Context) error {
+	return db.WithTx(ctx, func(ctx context.Context) error {
 		reparent, err := repo_model.GetPendingReparentByRepo(ctx, source.ID)
 		if err != nil {
 			return err
@@ -230,26 +254,11 @@ func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return util.ErrPermissionDenied
 		}
 
-		targetRepoID = reparent.TargetParentID
-
 		source.Status = repo_model.RepositoryReady
 		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, source, "status"); err != nil {
 			return err
 		}
 
 		return repo_model.DeleteReparent(ctx, source.ID)
-	}); err != nil {
-		return err
-	}
-
-	if targetRepoID > 0 {
-		targetRepo, err := repo_model.GetRepositoryByID(ctx, targetRepoID)
-		if err == nil && targetRepo.Status == repo_model.RepositoryPendingReparent {
-			if err := DeleteRepositoryDirectly(ctx, targetRepoID); err != nil {
-				log.Error("DeleteRepositoryDirectly: %v", err)
-			}
-		}
-	}
-
-	return nil
+	})
 }

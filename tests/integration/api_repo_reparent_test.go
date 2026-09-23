@@ -82,3 +82,50 @@ func TestAPIRepoReparentNotExist(t *testing.T) {
 	}).AddTokenAuth(token2)
 	MakeRequest(t, req, http.StatusNotFound)
 }
+
+func TestAPIRepoReparentPendingAndAccept(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session2 := loginUser(t, user2.Name)
+	token2 := getTokenForLoggedInUser(t, session2, auth_model.AccessTokenScopeWriteRepository)
+
+	user13 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+	session13 := loginUser(t, user13.Name)
+	token13 := getTokenForLoggedInUser(t, session13, auth_model.AccessTokenScopeWriteRepository)
+
+	// Reset repo1 to be a root repository
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	repo1.IsFork = false
+	repo1.ForkID = 0
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(t.Context(), repo1, "is_fork", "fork_id"))
+
+	// user2 initiates reparenting to a non-existent parent under user13
+	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user2.Name, repo1.Name), &api.ReparentRepoOption{
+		NewParent: user13.Name,
+		NewName:   "new-parent-api-pending",
+	}).AddTokenAuth(token2)
+	MakeRequest(t, req, http.StatusCreated)
+
+	// Target fork should not exist in target namespace prior to authorization
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-api-pending"})
+
+	// Initiator user2 cannot accept (unauthorized for target namespace)
+	req = NewRequest(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent/accept", user2.Name, repo1.Name)).AddTokenAuth(token2)
+	MakeRequest(t, req, http.StatusForbidden)
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-api-pending"})
+
+	// Target owner user13 accepts, creating the fork and completing reparenting
+	req = NewRequest(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent/accept", user2.Name, repo1.Name)).AddTokenAuth(token13)
+	MakeRequest(t, req, http.StatusAccepted)
+
+	// Verify target parent repository now exists and repo1 is its fork
+	newParent := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-api-pending"})
+	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	assert.True(t, repo1.IsFork)
+	assert.Equal(t, newParent.ID, repo1.ForkID)
+	assert.False(t, newParent.IsFork)
+	assert.Equal(t, repo_model.RepositoryReady, newParent.Status)
+	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
+}

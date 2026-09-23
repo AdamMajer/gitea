@@ -45,6 +45,10 @@ func (n *auditNotifier) RepoPendingTransfer(ctx context.Context, doer, newOwner 
 	RecordAs(ctx, doer, audit_model.RepositoryTransferStart, repo, "new_owner", newOwner.Name)
 }
 
+func (n *auditNotifier) RepoPendingReparent(ctx context.Context, doer, targetOwner *user_model.User, repo, target *repo_model.Repository) {
+	RecordAs(ctx, doer, audit_model.RepositoryTransferStart, repo, "new_owner", targetOwner.Name)
+}
+
 func (n *auditNotifier) ChangeDefaultBranch(ctx context.Context, repo *repo_model.Repository) {
 	Record(ctx, audit_model.RepositoryBranchDefault, repo, "default_branch", repo.DefaultBranch)
 }

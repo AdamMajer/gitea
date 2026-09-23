@@ -207,6 +207,12 @@ func (m *mailNotifier) RepoPendingTransfer(ctx context.Context, doer, newOwner *
 	}
 }
 
+func (m *mailNotifier) RepoPendingReparent(ctx context.Context, doer, targetOwner *user_model.User, repo, target *repo_model.Repository) {
+	if err := SendRepoTransferNotifyMail(ctx, doer, targetOwner, repo); err != nil {
+		log.Error("SendRepoTransferNotifyMail: %v", err)
+	}
+}
+
 func (m *mailNotifier) WorkflowRunStatusUpdate(ctx context.Context, repo *repo_model.Repository, sender *user_model.User, run *actions_model.ActionRun) {
 	if err := MailActionsTrigger(ctx, sender, repo, run); err != nil {
 		log.Error("MailActionsTrigger: %v", err)

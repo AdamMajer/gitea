@@ -380,9 +380,9 @@ func RepoPendingTransfer(ctx context.Context, doer, newOwner *user_model.User, r
 }
 
 // RepoPendingReparent notifies creation of pending reparenting to notifiers
-func RepoPendingReparent(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
+func RepoPendingReparent(ctx context.Context, doer, targetOwner *user_model.User, repo, target *repo_model.Repository) {
 	for _, notifier := range notifiers {
-		notifier.RepoPendingReparent(ctx, doer, repo, target)
+		notifier.RepoPendingReparent(ctx, doer, targetOwner, repo, target)
 	}
 }
 

@@ -204,7 +204,7 @@ func (*NullNotifier) RepoPendingTransfer(ctx context.Context, doer, newOwner *us
 }
 
 // RepoPendingReparent places a place holder function
-func (*NullNotifier) RepoPendingReparent(ctx context.Context, doer *user_model.User, repo, target *repo_model.Repository) {
+func (*NullNotifier) RepoPendingReparent(ctx context.Context, doer, targetOwner *user_model.User, repo, target *repo_model.Repository) {
 }
 
 // PackageCreate places a place holder function

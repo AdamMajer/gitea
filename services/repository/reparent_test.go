@@ -166,31 +166,37 @@ func TestReparentService(t *testing.T) {
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	assert.Equal(t, repo_model.RepositoryPendingReparent, repo1.Status)
 
-	// Verify new-parent-pending exists but is locked as RepositoryPendingReparent
-	newParentPending := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
-	assert.Equal(t, repo_model.RepositoryPendingReparent, newParentPending.Status)
+	// Verify target fork does not exist prior to authorization
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
 
 	reparent, err = repo_model.GetPendingReparentByRepo(ctx, repo1.ID)
 	assert.NoError(t, err)
 	assert.NotNil(t, reparent)
-	assert.Equal(t, newParentPending.ID, reparent.TargetParentID)
+	assert.Equal(t, int64(0), reparent.TargetParentID)
+	assert.Equal(t, int64(13), reparent.TargetOwnerID)
+	assert.Equal(t, "new-parent-pending", reparent.TargetRepoName)
 
 	// Reject reparenting as user13 (owner of target)
 	assert.NoError(t, RejectReparent(ctx, user13, repo1))
 
-	// Verify repo1 is ready and new-parent-pending has been DELETED
+	// Verify repo1 is ready and no repo was created under user13
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
-	unittest.AssertNotExistsBean(t, &repo_model.Repository{ID: newParentPending.ID})
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
 
-	// Start again and accept
+	// Start reparenting again
 	assert.NoError(t, StartRepositoryReparent(ctx, user2, repo1, nil, user13, "new-parent-pending"))
-	newParentPending = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
 
+	// Unauthorized user (initiator user2) cannot accept
+	assert.ErrorIs(t, AcceptReparent(ctx, user2, repo1), util.ErrPermissionDenied)
+	unittest.AssertNotExistsBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
+
+	// Target owner user13 accepts, creating the fork and swapping relationships
 	assert.NoError(t, AcceptReparent(ctx, user13, repo1))
 
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	newParentPending = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: newParentPending.ID})
+	newParentPending := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-pending"})
 
 	assert.True(t, repo1.IsFork)
 	assert.Equal(t, newParentPending.ID, repo1.ForkID)

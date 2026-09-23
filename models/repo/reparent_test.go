@@ -19,11 +19,11 @@ func TestRepoReparent(t *testing.T) {
 	repo1 := unittest.AssertExistsAndLoadBean(t, &Repository{ID: 1})
 	repo2 := unittest.AssertExistsAndLoadBean(t, &Repository{ID: 2})
 
-	// Create pending reparent
-	assert.NoError(t, CreatePendingReparent(ctx, user2, repo1.ID, repo2.ID))
+	// Create pending reparent with existing target
+	assert.NoError(t, CreatePendingReparent(ctx, user2, repo1.ID, repo2.ID, repo2.OwnerID, repo2.Name))
 
 	// Should not be able to create another one
-	err := CreatePendingReparent(ctx, user2, repo1.ID, repo2.ID)
+	err := CreatePendingReparent(ctx, user2, repo1.ID, repo2.ID, repo2.OwnerID, repo2.Name)
 	assert.Error(t, err)
 	assert.True(t, IsErrRepoReparentInProgress(err))
 
@@ -33,6 +33,8 @@ func TestRepoReparent(t *testing.T) {
 	assert.NotNil(t, reparent)
 	assert.Equal(t, repo1.ID, reparent.SourceRepoID)
 	assert.Equal(t, repo2.ID, reparent.TargetParentID)
+	assert.Equal(t, repo2.OwnerID, reparent.TargetOwnerID)
+	assert.Equal(t, repo2.Name, reparent.TargetRepoName)
 
 	// Load attributes
 	assert.NoError(t, reparent.LoadAttributes(ctx))
@@ -62,4 +64,28 @@ func TestRepoReparent(t *testing.T) {
 	repo1, err = GetRepositoryByID(ctx, repo1.ID)
 	assert.NoError(t, err)
 	assert.Equal(t, RepositoryReady, repo1.Status)
+
+	// Test pending reparent when target parent repo does not exist yet (TargetParentID = 0)
+	user13 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+	assert.NoError(t, CreatePendingReparent(ctx, user2, repo1.ID, 0, user13.ID, "non-existent-parent"))
+
+	reparent, err = GetPendingReparentByRepo(ctx, repo1.ID)
+	assert.NoError(t, err)
+	assert.NotNil(t, reparent)
+	assert.Equal(t, int64(0), reparent.TargetParentID)
+	assert.Equal(t, user13.ID, reparent.TargetOwnerID)
+	assert.Equal(t, "non-existent-parent", reparent.TargetRepoName)
+
+	assert.NoError(t, reparent.LoadAttributes(ctx))
+	assert.NotNil(t, reparent.TargetParent)
+	assert.Equal(t, user13.Name, reparent.TargetParent.OwnerName)
+	assert.Equal(t, "non-existent-parent", reparent.TargetParent.Name)
+
+	// Only target owner user13 can accept/reject; initiator user2 can cancel
+	assert.True(t, reparent.CanUserAcceptOrRejectReparent(ctx, user13))
+	assert.False(t, reparent.CanUserAcceptOrRejectReparent(ctx, user2))
+	assert.True(t, reparent.CanUserCancelReparent(ctx, user2))
+	assert.False(t, reparent.CanUserCancelReparent(ctx, user13))
+
+	assert.NoError(t, DeleteReparent(ctx, repo1.ID))
 }
