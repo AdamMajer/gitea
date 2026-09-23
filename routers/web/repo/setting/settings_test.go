@@ -281,3 +281,77 @@ func TestHandleSettingsPostMirrorPreservesExistingUsername(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "updated-password", password)
 }
+
+func TestHandleSettingsPostReparent(t *testing.T) {
+	unittest.PrepareTestEnv(t)
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+
+	t.Run("InvalidRepoName", func(t *testing.T) {
+		ctx, resp := contexttest.MockContext(t, "POST "+repo1.Link()+"/settings")
+		contexttest.LoadUser(t, ctx, user2.ID)
+		contexttest.LoadRepo(t, ctx, repo1.ID)
+		ctx.Req.Form.Set("action", "reparent")
+		ctx.Req.Form.Set("repo_name", "wrong-name")
+		ctx.Req.Form.Set("new_owner_name", user2.Name)
+		web.SetForm(ctx, &forms.RepoSettingForm{
+			RepoName: "wrong-name",
+		})
+
+		handleSettingsPostReparent(ctx)
+
+		assert.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "errorFields")
+		assert.Contains(t, resp.Body.String(), "repo_name")
+	})
+
+	t.Run("InvalidOwnerName", func(t *testing.T) {
+		ctx, resp := contexttest.MockContext(t, "POST "+repo1.Link()+"/settings")
+		contexttest.LoadUser(t, ctx, user2.ID)
+		contexttest.LoadRepo(t, ctx, repo1.ID)
+		ctx.Req.Form.Set("action", "reparent")
+		ctx.Req.Form.Set("repo_name", repo1.FullName())
+		ctx.Req.Form.Set("new_owner_name", "non-existent-user")
+		web.SetForm(ctx, &forms.RepoSettingForm{
+			RepoName: repo1.FullName(),
+		})
+
+		handleSettingsPostReparent(ctx)
+
+		assert.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "errorFields")
+		assert.Contains(t, resp.Body.String(), "new_owner_name")
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		repo2 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
+		repo2.IsPrivate = false
+		assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(t.Context(), repo2, "is_private"))
+
+		ctx, resp := contexttest.MockContext(t, "POST "+repo1.Link()+"/settings")
+		contexttest.LoadUser(t, ctx, user2.ID)
+		contexttest.LoadRepo(t, ctx, repo1.ID)
+		ctx.Req.Form.Set("action", "reparent")
+		ctx.Req.Form.Set("repo_name", repo1.FullName())
+		ctx.Req.Form.Set("new_owner_name", user2.Name)
+		ctx.Req.Form.Set("new_name", repo2.Name)
+		web.SetForm(ctx, &forms.RepoSettingForm{
+			RepoName: repo1.FullName(),
+		})
+
+		handleSettingsPostReparent(ctx)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+		assert.Contains(t, resp.Body.String(), "redirect")
+	})
+
+	t.Run("CancelReparent", func(t *testing.T) {
+		ctx, _ := contexttest.MockContext(t, "POST "+repo1.Link()+"/settings")
+		contexttest.LoadUser(t, ctx, user2.ID)
+		contexttest.LoadRepo(t, ctx, repo1.ID)
+		ctx.Req.Form.Set("action", "cancel_reparent")
+
+		handleSettingsPostCancelReparent(ctx)
+		assert.Equal(t, http.StatusSeeOther, ctx.Resp.WrittenStatus())
+	})
+}

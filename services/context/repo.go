@@ -816,6 +816,7 @@ func repoAssignmentPrepareRepoReparent(ctx *Context, data *repoAssignmentPrepare
 		ctx.Data["RepoReparent"] = repoReparent
 		if ctx.Doer != nil {
 			ctx.Data["CanUserAcceptOrRejectReparent"] = repoReparent.CanUserAcceptOrRejectReparent(ctx, ctx.Doer)
+			ctx.Data["CanUserCancelReparent"] = repoReparent.CanUserCancelReparent(ctx, ctx.Doer)
 		}
 	}
 }

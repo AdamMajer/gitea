@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
 	user_model "gitea.dev/models/user"
 	"gitea.dev/modules/log"
 	"gitea.dev/modules/timeutil"
@@ -128,6 +129,13 @@ func (r *RepoReparent) LoadAttributes(ctx context.Context) error {
 // CanUserAcceptOrRejectReparent checks if the user has the rights to accept/decline a repo reparenting.
 // The user must be the owner of the target repository (or admin of the org).
 func (r *RepoReparent) CanUserAcceptOrRejectReparent(ctx context.Context, u *user_model.User) bool {
+	if u == nil {
+		return false
+	}
+	if u.IsAdmin {
+		return true
+	}
+
 	if err := r.LoadTargetParent(ctx); err != nil {
 		log.Error("LoadTargetParent: %v", err)
 		return false
@@ -138,15 +146,53 @@ func (r *RepoReparent) CanUserAcceptOrRejectReparent(ctx context.Context, u *use
 		return false
 	}
 
-	if r.TargetParent.OwnerID == u.ID {
-		return true
+	if !r.TargetParent.Owner.IsOrganization() {
+		return r.TargetParent.OwnerID == u.ID
 	}
 
+	allowed, err := organization.CanCreateOrgRepo(ctx, r.TargetParent.OwnerID, u.ID)
+	if err != nil {
+		log.Error("CanCreateOrgRepo: %v", err)
+		return false
+	}
+
+	return allowed
+}
+
+// CanUserCancelReparent checks if the user has the rights to cancel a pending repo reparenting request.
+// The user must be the initiator (doer) or the owner of the source repository (or org admin).
+func (r *RepoReparent) CanUserCancelReparent(ctx context.Context, u *user_model.User) bool {
+	if u == nil {
+		return false
+	}
 	if u.IsAdmin {
 		return true
 	}
+	if r.DoerID == u.ID {
+		return true
+	}
 
-	return false
+	if err := r.LoadSourceRepo(ctx); err != nil {
+		log.Error("LoadSourceRepo: %v", err)
+		return false
+	}
+
+	if err := r.SourceRepo.LoadOwner(ctx); err != nil {
+		log.Error("LoadOwner: %v", err)
+		return false
+	}
+
+	if !r.SourceRepo.Owner.IsOrganization() {
+		return r.SourceRepo.OwnerID == u.ID
+	}
+
+	allowed, err := organization.CanCreateOrgRepo(ctx, r.SourceRepo.OwnerID, u.ID)
+	if err != nil {
+		log.Error("CanCreateOrgRepo: %v", err)
+		return false
+	}
+
+	return allowed
 }
 
 // GetPendingReparentByRepo fetches the pending reparenting request for a repository

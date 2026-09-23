@@ -953,21 +953,21 @@ func handleSettingsPostCancelTransfer(ctx *context.Context) {
 }
 
 func handleSettingsPostReparent(ctx *context.Context) {
-	repo := ctx.Repo.Repository
-	if !ctx.Repo.Permission.IsOwner() {
-		ctx.HTTPError(http.StatusNotFound)
+	if !canManageRepoDangerZone(ctx) {
 		return
 	}
 
-	if repo.Name != ctx.FormString("repo_name") {
-		ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_repo_name"), tplSettingsOptions, nil)
+	form := web.GetForm[*forms.RepoSettingForm](ctx)
+	repo := ctx.Repo.Repository
+	if repo.FullName() != form.RepoName {
+		ctx.JSONErrorWithField(ctx.Tr("form.enterred_invalid_repo_name"), "repo_name")
 		return
 	}
 
 	newOwner, err := user_model.GetUserByName(ctx, ctx.FormString("new_owner_name"))
 	if err != nil {
 		if user_model.IsErrUserNotExist(err) {
-			ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
+			ctx.JSONErrorWithField(ctx.Tr("form.enterred_invalid_owner_name"), "new_owner_name")
 			return
 		}
 		ctx.ServerError("GetUserByName", err)
@@ -977,7 +977,7 @@ func handleSettingsPostReparent(ctx *context.Context) {
 	if newOwner.Type == user_model.UserTypeOrganization {
 		if !ctx.Doer.IsAdmin && newOwner.Visibility == structs.VisibleTypePrivate && !organization.OrgFromUser(newOwner).HasMemberWithUserID(ctx, ctx.Doer.ID) {
 			// The user shouldn't know about this organization
-			ctx.RenderWithErrDeprecated(ctx.Tr("form.enterred_invalid_owner_name"), tplSettingsOptions, nil)
+			ctx.JSONErrorWithField(ctx.Tr("form.enterred_invalid_owner_name"), "new_owner_name")
 			return
 		}
 	}
@@ -1005,10 +1005,12 @@ func handleSettingsPostReparent(ctx *context.Context) {
 
 	err = repo_service.StartRepositoryReparent(ctx, ctx.Doer, repo, targetParent, newOwner, parentName)
 	if err != nil {
-		if repo_model.IsErrRepoTransferInProgress(err) {
-			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)
+		if repo_model.IsErrRepoTransferInProgress(err) || repo_model.IsErrRepoReparentInProgress(err) {
+			ctx.JSONError(ctx.Tr("repo.settings.transfer_in_progress"))
 		} else if repo_model.IsErrRepoAlreadyExist(err) {
-			ctx.RenderWithErrDeprecated(ctx.Tr("repo.settings.new_owner_has_same_repo"), tplSettingsOptions, nil)
+			ctx.JSONError(ctx.Tr("repo.settings.new_owner_has_same_repo"))
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.JSONError(ctx.Tr("repo.reparent.no_permission_to_accept"))
 		} else {
 			ctx.ServerError("StartRepositoryReparent", err)
 		}
@@ -1019,24 +1021,23 @@ func handleSettingsPostReparent(ctx *context.Context) {
 
 	if repo.Status == repo_model.RepositoryPendingReparent {
 		ctx.Flash.Info(ctx.Tr("repo.settings.transfer_started", newOwner.DisplayName()))
-		ctx.Redirect(repo.Link() + "/settings")
+		ctx.JSONRedirect(repo.Link() + "/settings")
 	} else {
 		ctx.Flash.Success(ctx.Tr("repo.reparent.success"))
-		ctx.Redirect(repo.Link())
+		ctx.JSONRedirect(repo.Link())
 	}
 }
 
 func handleSettingsPostCancelReparent(ctx *context.Context) {
-	repo := ctx.Repo.Repository
-	if !ctx.Repo.Permission.IsOwner() {
-		ctx.HTTPError(http.StatusNotFound)
+	if !canManageRepoDangerZone(ctx) {
 		return
 	}
 
+	repo := ctx.Repo.Repository
 	err := repo_service.RejectReparent(ctx, ctx.Doer, ctx.Repo.Repository)
 	if err != nil {
 		if repo_model.IsErrNoPendingReparent(err) {
-			ctx.Flash.Error("repo.settings.transfer_abort_invalid")
+			ctx.Flash.Error(ctx.Tr("repo.settings.transfer_abort_invalid"))
 			ctx.Redirect(repo.Link() + "/settings")
 		} else {
 			ctx.ServerError("RejectReparent", err)

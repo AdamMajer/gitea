@@ -44,6 +44,8 @@ func TestRepoReparent(t *testing.T) {
 	assert.True(t, reparent.CanUserAcceptOrRejectReparent(ctx, user2))
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 	assert.False(t, reparent.CanUserAcceptOrRejectReparent(ctx, user5))
+	assert.True(t, reparent.CanUserCancelReparent(ctx, user2))
+	assert.False(t, reparent.CanUserCancelReparent(ctx, user5))
 
 	// Verify repo1 status is RepositoryPendingReparent before deletion
 	repo1, err = GetRepositoryByID(ctx, repo1.ID)

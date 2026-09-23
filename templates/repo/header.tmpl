@@ -63,20 +63,30 @@
 					{{end}}
 					{{if $.RepoReparent}}
 						<div class="ui yellow label">{{ctx.Locale.Tr "repo.reparent.desc" $.RepoReparent.TargetParent.OwnerName $.RepoReparent.TargetParent.Name}}</div>
-						<form method="post" action="{{$.RepoLink}}/action/accept_reparent?redirect_to={{$.RepoLink}}">
-							<div class="flex-text-inline" data-tooltip-content="{{if $.CanUserAcceptOrRejectReparent}}{{ctx.Locale.Tr "repo.reparent.accept_desc" $.RepoReparent.Doer.DisplayName $.RepoReparent.TargetParent.FullName}}{{else}}{{ctx.Locale.Tr "repo.reparent.no_permission_to_accept"}}{{end}}">
-								<button type="submit" class="ui compact small basic button {{if $.CanUserAcceptOrRejectReparent}}primary {{end}} ok small"{{if not $.CanUserAcceptOrRejectReparent}} disabled{{end}}>
-									{{ctx.Locale.Tr "repo.reparent.accept"}}
-								</button>
-							</div>
-						</form>
-						<form method="post" action="{{$.RepoLink}}/action/reject_reparent?redirect_to={{$.RepoLink}}">
-							<div class="flex-text-inline" data-tooltip-content="{{if $.CanUserAcceptOrRejectReparent}}{{ctx.Locale.Tr "repo.reparent.reject_desc" $.RepoReparent.Doer.DisplayName $.RepoReparent.TargetParent.FullName}}{{else}}{{ctx.Locale.Tr "repo.reparent.no_permission_to_reject"}}{{end}}">
-								<button type="submit" class="ui compact small basic button {{if $.CanUserAcceptOrRejectReparent}}red {{end}}ok small"{{if not $.CanUserAcceptOrRejectReparent}} disabled{{end}}>
-									{{ctx.Locale.Tr "repo.reparent.reject"}}
-								</button>
-							</div>
-						</form>
+						{{if $.CanUserAcceptOrRejectReparent}}
+							<form method="post" action="{{$.RepoLink}}/action/accept_reparent?redirect_to={{$.RepoLink}}">
+								<div class="flex-text-inline" data-tooltip-content="{{ctx.Locale.Tr "repo.reparent.accept_desc" $.RepoReparent.Doer.DisplayName $.RepoReparent.TargetParent.FullName}}">
+									<button type="submit" class="ui compact small basic primary ok button">
+										{{ctx.Locale.Tr "repo.reparent.accept"}}
+									</button>
+								</div>
+							</form>
+							<form method="post" action="{{$.RepoLink}}/action/reject_reparent?redirect_to={{$.RepoLink}}">
+								<div class="flex-text-inline" data-tooltip-content="{{ctx.Locale.Tr "repo.reparent.reject_desc" $.RepoReparent.Doer.DisplayName $.RepoReparent.TargetParent.FullName}}">
+									<button type="submit" class="ui compact small basic red ok button">
+										{{ctx.Locale.Tr "repo.reparent.reject"}}
+									</button>
+								</div>
+							</form>
+						{{else if $.CanUserCancelReparent}}
+							<form method="post" action="{{$.RepoLink}}/action/reject_reparent?redirect_to={{$.RepoLink}}">
+								<div class="flex-text-inline" data-tooltip-content="{{ctx.Locale.Tr "repo.reparent.reject"}}">
+									<button type="submit" class="ui compact small basic red ok button">
+										{{ctx.Locale.Tr "repo.reparent.reject"}}
+									</button>
+								</div>
+							</form>
+						{{end}}
 					{{end}}
 					{{if $.EnableFeed}}
 					{{/* An extra div-element is not necessary here, as this button does not secretly contain two buttons. */}}

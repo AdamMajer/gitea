@@ -86,8 +86,27 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 			return nil
 		}
 
-		// Prevent unauthorized creation of dummy repositories in another namespace
-		return util.ErrPermissionDenied
+		// Create the fork as pending/locked under targetOwner
+		target, err = ForkRepository(ctx, doer, targetOwner, ForkRepoOptions{
+			BaseRepo:    source,
+			Name:        targetName,
+			Description: source.Description,
+		})
+		if err != nil {
+			return err
+		}
+
+		target.Status = repo_model.RepositoryPendingReparent
+		if err := repo_model.UpdateRepositoryColsNoAutoTime(ctx, target, "status"); err != nil {
+			return err
+		}
+
+		if err := repo_model.CreatePendingReparent(ctx, doer, source.ID, target.ID); err != nil {
+			return err
+		}
+
+		notify_service.RepoPendingReparent(ctx, doer, source, target)
+		return nil
 	}
 
 	if err := target.LoadOwner(ctx); err != nil {
@@ -207,7 +226,7 @@ func RejectReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 			return err
 		}
 
-		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) && source.OwnerID != doer.ID {
+		if !reparent.CanUserAcceptOrRejectReparent(ctx, doer) && !reparent.CanUserCancelReparent(ctx, doer) {
 			return util.ErrPermissionDenied
 		}
 
