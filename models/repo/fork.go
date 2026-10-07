@@ -103,13 +103,18 @@ func GetForksByUserAndOrgs(ctx context.Context, user *user_model.User, repo *Rep
 }
 
 // ReparentFork sets the fork to be an unforked repository and the forked repo becomes its fork
-func ReparentFork(ctx context.Context, forkedRepoID, srcForkID int64) error {
+func ReparentFork(ctx context.Context, forkedRepoID, srcForkID, oldParentID int64) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if _, err := db.GetEngine(ctx).Table("repository").ID(srcForkID).Cols("fork_id", "is_fork").Update(&Repository{ForkID: forkedRepoID, IsFork: true}); err != nil {
 			return err
 		}
 		if _, err := db.GetEngine(ctx).Exec("UPDATE `repository` SET num_forks=num_forks-1 WHERE id=? AND num_forks > 0", srcForkID); err != nil {
 			return err
+		}
+		if oldParentID > 0 {
+			if _, err := db.GetEngine(ctx).Exec("UPDATE `repository` SET num_forks=num_forks-1 WHERE id=? AND num_forks > 0", oldParentID); err != nil {
+				return err
+			}
 		}
 		if _, err := db.GetEngine(ctx).Table("repository").ID(forkedRepoID).Cols("fork_id", "is_fork", "num_forks").Update(&Repository{ForkID: 0, NumForks: 1, IsFork: false}); err != nil {
 			return err

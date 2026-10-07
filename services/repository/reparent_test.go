@@ -279,3 +279,57 @@ func TestReparentServiceGlobalLock(t *testing.T) {
 	// Release the lock
 	releaser()
 }
+
+func TestReparentServiceOldParentForkCount(t *testing.T) {
+	assert.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	user13 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+
+	repo10 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10}) // Root repo, NumForks=1
+	repo11 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11}) // Owned by user13, fork of repo10 (ID 10)
+
+	initialForks := repo10.NumForks
+
+	// Case 1: user13 reparents repo11 to create a new repo directly under user13 (target does not exist)
+	assert.NoError(t, StartRepositoryReparent(ctx, user13, repo11, nil, user13, "new-parent-direct-forkcount"))
+
+	repo10 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	repo11 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11})
+	newParent := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 13, Name: "new-parent-direct-forkcount"})
+
+	assert.Equal(t, initialForks-1, repo10.NumForks)
+	assert.Equal(t, newParent.ID, repo11.ForkID)
+	assert.Equal(t, 1, newParent.NumForks)
+
+	// Clean up newParent
+	assert.NoError(t, DeleteRepositoryDirectly(ctx, newParent.ID))
+
+	// Case 2: Deferred creation when target does not exist and repo11 is a fork of an old parent
+	// Reset repo11 as fork of repo10
+	repo11.IsFork = true
+	repo11.ForkID = repo10.ID
+	assert.NoError(t, repo_model.UpdateRepositoryColsNoAutoTime(ctx, repo11, "is_fork", "fork_id"))
+	assert.NoError(t, repo_model.IncrementRepoForkNum(ctx, repo10.ID))
+
+	repo10 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	forksBeforePending := repo10.NumForks
+
+	// user13 reparents repo11 to non-existent repo under user2
+	assert.NoError(t, StartRepositoryReparent(ctx, user13, repo11, nil, user2, "new-parent-pending-forkcount"))
+
+	// user2 accepts reparent
+	assert.NoError(t, AcceptReparent(ctx, user2, repo11))
+
+	repo10 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	repo11 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11})
+	newParentPending := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: 2, Name: "new-parent-pending-forkcount"})
+
+	assert.Equal(t, forksBeforePending-1, repo10.NumForks)
+	assert.Equal(t, newParentPending.ID, repo11.ForkID)
+	assert.Equal(t, 1, newParentPending.NumForks)
+
+	// Clean up
+	assert.NoError(t, DeleteRepositoryDirectly(ctx, newParentPending.ID))
+}

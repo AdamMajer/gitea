@@ -129,3 +129,35 @@ func TestAPIRepoReparentPendingAndAccept(t *testing.T) {
 	assert.Equal(t, repo_model.RepositoryReady, newParent.Status)
 	assert.Equal(t, repo_model.RepositoryReady, repo1.Status)
 }
+
+func TestAPIRepoReparentOldParentForkCount(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session2 := loginUser(t, user2.Name)
+	token2 := getTokenForLoggedInUser(t, session2, auth_model.AccessTokenScopeWriteRepository)
+
+	user13 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 13})
+	session13 := loginUser(t, user13.Name)
+	token13 := getTokenForLoggedInUser(t, session13, auth_model.AccessTokenScopeWriteRepository)
+
+	// repo11 is owned by user13, and is a fork of repo10
+	repo10 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	repo11 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 11})
+	initialForks := repo10.NumForks
+
+	// user13 initiates reparenting to a new repo under user2
+	req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent", user13.Name, repo11.Name), &api.ReparentRepoOption{
+		NewParent: user2.Name,
+		NewName:   "new-parent-api-forkcount",
+	}).AddTokenAuth(token13)
+	MakeRequest(t, req, http.StatusCreated)
+
+	// user2 accepts reparent
+	req = NewRequest(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/reparent/accept", user13.Name, repo11.Name)).AddTokenAuth(token2)
+	MakeRequest(t, req, http.StatusAccepted)
+
+	// Verify old parent's fork count is decremented
+	repo10 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 10})
+	assert.Equal(t, initialForks-1, repo10.NumForks)
+}

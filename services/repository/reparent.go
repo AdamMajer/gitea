@@ -54,6 +54,8 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 		return util.ErrPermissionDenied
 	}
 
+	oldParentID := source.ForkID
+
 	if target == nil {
 		// Target Parent does NOT exist: Create a reverse fork!
 		if targetOwner == nil || targetName == "" {
@@ -77,7 +79,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 				return err
 			}
 
-			if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+			if err := repo_model.ReparentFork(ctx, target.ID, source.ID, oldParentID); err != nil {
 				return err
 			}
 
@@ -129,7 +131,7 @@ func StartRepositoryReparent(ctx context.Context, doer *user_model.User, source,
 		}
 
 		if isDirect {
-			if err := repo_model.ReparentFork(ctx, target.ID, source.ID); err != nil {
+			if err := repo_model.ReparentFork(ctx, target.ID, source.ID, oldParentID); err != nil {
 				return err
 			}
 			notify_service.ReparentRepository(ctx, doer, source, target)
@@ -172,6 +174,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		return util.ErrPermissionDenied
 	}
 
+	oldParentID := source.ForkID
 	var targetRepo *repo_model.Repository
 
 	if reparent.TargetParentID > 0 {
@@ -181,7 +184,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		}
 
 		if err := db.WithTx(ctx, func(ctx context.Context) error {
-			if err := repo_model.ReparentFork(ctx, reparent.TargetParentID, source.ID); err != nil {
+			if err := repo_model.ReparentFork(ctx, reparent.TargetParentID, source.ID, oldParentID); err != nil {
 				return err
 			}
 
@@ -217,7 +220,7 @@ func AcceptReparent(ctx context.Context, doer *user_model.User, source *repo_mod
 		}
 
 		if err := db.WithTx(ctx, func(ctx context.Context) error {
-			if err := repo_model.ReparentFork(ctx, targetRepo.ID, source.ID); err != nil {
+			if err := repo_model.ReparentFork(ctx, targetRepo.ID, source.ID, oldParentID); err != nil {
 				return err
 			}
 
