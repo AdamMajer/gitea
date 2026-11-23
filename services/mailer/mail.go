@@ -15,23 +15,26 @@ import (
 	"mime"
 	"regexp"
 	"strings"
+	"sync"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/httplib"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/storage"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/typesniffer"
-	sender_service "code.gitea.io/gitea/services/mailer/sender"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/httplib"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/storage"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/typesniffer"
+	sender_service "gitea.dev/services/mailer/sender"
 
 	"golang.org/x/net/html"
 )
 
 const mailMaxSubjectRunes = 256 // There's no actual limit for subject in RFC 5322
 
-var subjectRemoveSpaces = regexp.MustCompile(`[\s]+`)
+var subjectRemoveSpaces = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`[\s]+`)
+})
 
 func LoadedTemplates() *templates.MailRender {
 	return templates.MailRenderer()
@@ -47,7 +50,7 @@ func SendTestMail(email string) error {
 }
 
 func sanitizeSubject(subject string) string {
-	runes := []rune(strings.TrimSpace(subjectRemoveSpaces.ReplaceAllLiteralString(subject, " ")))
+	runes := []rune(strings.TrimSpace(subjectRemoveSpaces().ReplaceAllLiteralString(subject, " ")))
 	if len(runes) > mailMaxSubjectRunes {
 		runes = runes[:mailMaxSubjectRunes]
 	}
@@ -158,24 +161,29 @@ func (b64embedder *mailAttachmentBase64Embedder) AttachmentSrcToBase64DataURI(ct
 
 func fromDisplayName(u *user_model.User) string {
 	if setting.MailService.FromDisplayNameFormatTemplate != nil {
-		var ctx bytes.Buffer
-		err := setting.MailService.FromDisplayNameFormatTemplate.Execute(&ctx, map[string]any{
+		var buf bytes.Buffer
+		err := setting.MailService.FromDisplayNameFormatTemplate.Execute(&buf, map[string]any{
 			"DisplayName": u.DisplayName(),
 			"AppName":     setting.AppName,
-			"Domain":      setting.Domain,
+			"Domain":      setting.AppDomain,
 		})
 		if err == nil {
-			return mime.QEncoding.Encode("utf-8", ctx.String())
+			return mime.QEncoding.Encode("utf-8", buf.String())
 		}
 		log.Error("fromDisplayName: %w", err)
 	}
-	return u.GetCompleteName()
+	def := u.Name
+	if fullName := strings.TrimSpace(u.FullName); fullName != "" {
+		// use "Full Name (username)" for email's sender name if Full Name is not empty
+		def = fullName + " (" + u.Name + ")"
+	}
+	return def
 }
 
 func generateMetadataHeaders(repo *repo_model.Repository) map[string]string {
 	return map[string]string{
 		// https://datatracker.ietf.org/doc/html/rfc2919
-		"List-ID": fmt.Sprintf("%s <%s.%s.%s>", repo.FullName(), repo.Name, repo.OwnerName, setting.Domain),
+		"List-ID": fmt.Sprintf("%s <%s.%s.%s>", repo.FullName(), repo.Name, repo.OwnerName, setting.AppDomain),
 
 		// https://datatracker.ietf.org/doc/html/rfc2369
 		"List-Archive": fmt.Sprintf("<%s>", repo.HTMLURL()),

@@ -5,33 +5,35 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/util"
 
 	"github.com/go-chi/chi/v5"
 )
 
 type RouterPathGroup struct {
-	r         *Router
-	pathParam string
-	matchers  []*routerPathMatcher
+	r           *Router
+	pathParam   string
+	matchers    []*routerPathMatcher
+	unescape    bool
+	middlewares []any
 }
 
 func (g *RouterPathGroup) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	chiCtx := chi.RouteContext(req.Context())
 	path := chiCtx.URLParam(g.pathParam)
+	if g.unescape {
+		path, _ = url.PathUnescape(path)
+	}
 	for _, m := range g.matchers {
-		if m.matchPath(chiCtx, path) {
+		if m.matchPath(chiCtx, path, g.unescape) {
 			chiCtx.RoutePatterns = append(chiCtx.RoutePatterns, m.pattern)
-			handler := m.handlerFunc
-			for i := len(m.middlewares) - 1; i >= 0; i-- {
-				handler = m.middlewares[i](handler).ServeHTTP
-			}
-			handler(resp, req)
+			executeMiddlewaresHandler(resp, req, m.middlewares, m.handlerFunc)
 			return
 		}
 	}
@@ -54,11 +56,16 @@ func (g *RouterPathGroup) MatchPath(methods, pattern string, h ...any) {
 }
 
 func (g *RouterPathGroup) MatchPattern(methods string, pattern *RouterPathGroupPattern, h ...any) {
-	g.matchers = append(g.matchers, newRouterPathMatcher(methods, pattern, h...))
+	g.matchers = append(g.matchers, newRouterPathMatcher(methods, pattern, g.middlewares, h...))
+}
+
+func (g *RouterPathGroup) UseUnescapedPath() {
+	g.unescape = true
 }
 
 type routerPathParam struct {
 	name         string
+	pathSepEnd   bool
 	captureGroup int
 }
 
@@ -67,11 +74,11 @@ type routerPathMatcher struct {
 	pattern     string
 	re          *regexp.Regexp
 	params      []routerPathParam
-	middlewares []func(http.Handler) http.Handler
+	middlewares []middlewareProvider
 	handlerFunc http.HandlerFunc
 }
 
-func (p *routerPathMatcher) matchPath(chiCtx *chi.Context, path string) bool {
+func (p *routerPathMatcher) matchPath(chiCtx *chi.Context, path string, unescaped bool) bool {
 	if !p.methods.Contains(chiCtx.RouteMethod) {
 		return false
 	}
@@ -97,7 +104,18 @@ func (p *routerPathMatcher) matchPath(chiCtx *chi.Context, path string) bool {
 	}
 	for i, pm := range paramMatches {
 		groupIdx := p.params[i].captureGroup * 2
-		chiCtx.URLParams.Add(p.params[i].name, path[pm[groupIdx]:pm[groupIdx+1]])
+		if pm[groupIdx] == -1 || pm[groupIdx+1] == -1 {
+			chiCtx.URLParams.Add(p.params[i].name, "")
+			continue
+		}
+		val := path[pm[groupIdx]:pm[groupIdx+1]]
+		if p.params[i].pathSepEnd {
+			val = strings.TrimSuffix(val, "/")
+		}
+		if unescaped {
+			val = url.PathEscape(val)
+		}
+		chiCtx.URLParams.Add(p.params[i].name, val)
 	}
 	return true
 }
@@ -110,8 +128,11 @@ func isValidMethod(name string) bool {
 	return false
 }
 
-func newRouterPathMatcher(methods string, patternRegexp *RouterPathGroupPattern, h ...any) *routerPathMatcher {
-	middlewares, handlerFunc := wrapMiddlewareAndHandler(patternRegexp.middlewares, h)
+func newRouterPathMatcher(methods string, patternRegexp *RouterPathGroupPattern, uses []any, h ...any) *routerPathMatcher {
+	middlewares, handlerFunc, hasPreMiddlewares := wrapMiddlewareAndHandler(uses, patternRegexp.middlewares, h)
+	if hasPreMiddlewares {
+		panic("pre-middlewares are not supported in router path matcher")
+	}
 	p := &routerPathMatcher{methods: make(container.Set[string]), middlewares: middlewares, handlerFunc: handlerFunc}
 	for method := range strings.SplitSeq(methods, ",") {
 		method = strings.TrimSpace(method)
@@ -146,11 +167,19 @@ func patternRegexp(pattern string, h ...any) *RouterPathGroupPattern {
 		// it is not used so no need to implement it now
 		param := routerPathParam{}
 		if partExp == "*" {
-			re = append(re, "(.*?)/?"...)
+			// "<part:*>" is a shorthand for optionally matching any string (but not greedy)
+			partExp = ".*?"
 			if lastEnd < len(pattern) && pattern[lastEnd] == '/' {
-				lastEnd++ // the "*" pattern is able to handle the last slash, so skip it
+				// if this param part ends with path separator "/", then consider it together: "(.*?/)"
+				partExp += "/"
+				param.pathSepEnd = true
+				lastEnd++
 			}
+			re = append(re, '(')
+			re = append(re, partExp...)
+			re = append(re, ')', '?') // the wildcard matching is optional
 		} else {
+			// the pattern is user-provided regexp, defaults to a path part (separated by "/")
 			partExp = util.IfZero(partExp, "[^/]+")
 			re = append(re, '(')
 			re = append(re, partExp...)

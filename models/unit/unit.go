@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"code.gitea.io/gitea/models/perm"
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
+	"gitea.dev/models/perm"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
 )
 
 // Type is Unit's Type
@@ -30,12 +30,9 @@ const (
 	TypeWiki            // 5 Wiki
 	TypeExternalWiki    // 6 ExternalWiki
 	TypeExternalTracker // 7 ExternalTracker
-	TypeProjects        // 8 Projects
-	TypePackages        // 9 Packages
+	TypeProjects        // 8 Projects: implies that the doer can read some information from issue & PR, org-level is not well-designed
+	TypePackages        // 9 Packages: for most cases, it is for owner-level (not well-designed though)
 	TypeActions         // 10 Actions
-
-	// FIXME: TEAM-UNIT-PERMISSION: the team unit "admin" permission's design is not right, when a new unit is added in the future,
-	// admin team won't inherit the correct admin permission for the new unit, need to have a complete fix before adding any new unit.
 )
 
 // Value returns integer value for unit type (used by template)

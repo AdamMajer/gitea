@@ -7,25 +7,21 @@ import (
 	"context"
 	"slices"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/modules/log"
-	actions_service "code.gitea.io/gitea/services/actions"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	"gitea.dev/modules/log"
+	actions_service "gitea.dev/services/actions"
 )
 
 // UpdateRepositoryUnits updates a repository's units
 func UpdateRepositoryUnits(ctx context.Context, repo *repo_model.Repository, units []repo_model.RepoUnit, deleteUnitTypes []unit.Type) (err error) {
-	return db.WithTx(ctx, func(ctx context.Context) error {
+	disableActions := slices.Contains(deleteUnitTypes, unit.TypeActions)
+
+	err = db.WithTx(ctx, func(ctx context.Context) error {
 		// Delete existing settings of units before adding again
 		for _, u := range units {
 			deleteUnitTypes = append(deleteUnitTypes, u.Type)
-		}
-
-		if slices.Contains(deleteUnitTypes, unit.TypeActions) {
-			if err := actions_service.CleanRepoScheduleTasks(ctx, repo); err != nil {
-				log.Error("CleanRepoScheduleTasks: %v", err)
-			}
 		}
 
 		for _, u := range units {
@@ -49,4 +45,15 @@ func UpdateRepositoryUnits(ctx context.Context, repo *repo_model.Repository, uni
 
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// only disabling stops in-progress schedule runs
+	if disableActions {
+		if err := actions_service.CleanRepoScheduleTasks(ctx, repo); err != nil {
+			log.Error("CleanRepoScheduleTasks: %v", err)
+		}
+	}
+	return nil
 }

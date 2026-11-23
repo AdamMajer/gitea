@@ -4,32 +4,17 @@
 package user
 
 import (
-	"code.gitea.io/gitea/routers/api/v1/shared"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/routers/api/v1/shared"
+	"gitea.dev/services/context"
 )
 
 // https://docs.github.com/en/rest/actions/self-hosted-runners?apiVersion=2022-11-28#create-a-registration-token-for-an-organization
-
-// GetRegistrationToken returns the token to register user runners
-func GetRegistrationToken(ctx *context.APIContext) {
-	// swagger:operation GET /user/actions/runners/registration-token user userGetRunnerRegistrationToken
-	// ---
-	// summary: Get an user's actions runner registration token
-	// produces:
-	// - application/json
-	// parameters:
-	// responses:
-	//   "200":
-	//     "$ref": "#/responses/RegistrationToken"
-
-	shared.GetRegistrationToken(ctx, ctx.Doer.ID, 0)
-}
 
 // CreateRegistrationToken returns the token to register user runners
 func CreateRegistrationToken(ctx *context.APIContext) {
 	// swagger:operation POST /user/actions/runners/registration-token user userCreateRunnerRegistrationToken
 	// ---
-	// summary: Get an user's actions runner registration token
+	// summary: Get a user's actions runner registration token
 	// produces:
 	// - application/json
 	// parameters:
@@ -47,21 +32,25 @@ func ListRunners(ctx *context.APIContext) {
 	// summary: Get user-level runners
 	// produces:
 	// - application/json
+	// parameters:
+	// - name: disabled
+	//   in: query
+	//   description: filter by disabled status (true or false)
+	//   type: boolean
+	//   required: false
 	// responses:
 	//   "200":
-	//     "$ref": "#/definitions/ActionRunnersResponse"
-	//   "400":
+	//     "$ref": "#/responses/RunnerList"
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 	shared.ListRunners(ctx, ctx.Doer.ID, 0)
 }
 
-// GetRunner get an user-level runner
+// GetRunner get a user-level runner
 func GetRunner(ctx *context.APIContext) {
 	// swagger:operation GET /user/actions/runners/{runner_id} user getUserRunner
 	// ---
-	// summary: Get an user-level runner
+	// summary: Get a user-level runner
 	// produces:
 	// - application/json
 	// parameters:
@@ -72,19 +61,17 @@ func GetRunner(ctx *context.APIContext) {
 	//   required: true
 	// responses:
 	//   "200":
-	//     "$ref": "#/definitions/ActionRunner"
-	//   "400":
+	//     "$ref": "#/responses/Runner"
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 	shared.GetRunner(ctx, ctx.Doer.ID, 0, ctx.PathParamInt64("runner_id"))
 }
 
-// DeleteRunner delete an user-level runner
+// DeleteRunner delete a user-level runner
 func DeleteRunner(ctx *context.APIContext) {
 	// swagger:operation DELETE /user/actions/runners/{runner_id} user deleteUserRunner
 	// ---
-	// summary: Delete an user-level runner
+	// summary: Delete a user-level runner
 	// produces:
 	// - application/json
 	// parameters:
@@ -96,9 +83,34 @@ func DeleteRunner(ctx *context.APIContext) {
 	// responses:
 	//   "204":
 	//     description: runner has been deleted
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 	shared.DeleteRunner(ctx, ctx.Doer.ID, 0, ctx.PathParamInt64("runner_id"))
+}
+
+// UpdateRunner update a user-level runner
+func UpdateRunner(ctx *context.APIContext) {
+	// swagger:operation PATCH /user/actions/runners/{runner_id} user updateUserRunner
+	// ---
+	// summary: Update a user-level runner
+	// consumes:
+	// - application/json
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: runner_id
+	//   in: path
+	//   description: id of the runner
+	//   type: string
+	//   required: true
+	// - name: body
+	//   in: body
+	//   schema:
+	//     "$ref": "#/definitions/EditActionRunnerOption"
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/Runner"
+	//   default:
+	//     "$ref": "#/responses/error"
+	shared.UpdateRunner(ctx, ctx.Doer.ID, 0, ctx.PathParamInt64("runner_id"))
 }

@@ -6,21 +6,24 @@ package feed
 import (
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/services/context"
 
 	"github.com/gorilla/feeds"
 )
 
 // shows tags and/or releases on the repo as RSS / Atom feed
 func ShowReleaseFeed(ctx *context.Context, repo *repo_model.Repository, isReleasesOnly bool, formatType string) {
+	if !checkRepoFeedTokenScope(ctx) {
+		return
+	}
 	releases, err := db.Find[repo_model.Release](ctx, repo_model.FindReleasesOptions{
 		IncludeTags: !isReleasesOnly,
 		RepoID:      ctx.Repo.Repository.ID,
 	})
 	if err != nil {
-		ctx.ServerError("GetReleasesByRepoID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -44,7 +47,7 @@ func ShowReleaseFeed(ctx *context.Context, repo *repo_model.Repository, isReleas
 
 	feed.Items, err = releasesToFeedItems(ctx, releases)
 	if err != nil {
-		ctx.ServerError("releasesToFeedItems", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

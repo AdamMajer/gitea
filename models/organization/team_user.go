@@ -6,18 +6,18 @@ package organization
 import (
 	"context"
 
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
 
 	"xorm.io/builder"
 )
 
-// TeamUser represents an team-user relation.
+// TeamUser represents a team-user relation.
 type TeamUser struct {
 	ID     int64 `xorm:"pk autoincr"`
 	OrgID  int64 `xorm:"INDEX"`
 	TeamID int64 `xorm:"UNIQUE(s)"`
-	UID    int64 `xorm:"UNIQUE(s)"`
+	UID    int64 `xorm:"UNIQUE(s) INDEX"`
 }
 
 // IsTeamMember returns true if given user is a member of team.
@@ -34,14 +34,6 @@ func IsTeamMember(ctx context.Context, orgID, teamID, userID int64) (bool, error
 type SearchMembersOptions struct {
 	db.ListOptions
 	TeamID int64
-}
-
-func (opts SearchMembersOptions) ToConds() builder.Cond {
-	cond := builder.NewCond()
-	if opts.TeamID > 0 {
-		cond = cond.And(builder.Eq{"": opts.TeamID})
-	}
-	return cond
 }
 
 // GetTeamMembers returns all members in given team of organization.

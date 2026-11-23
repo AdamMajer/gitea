@@ -8,12 +8,12 @@ import (
 	"io"
 	"strings"
 
-	packages_model "code.gitea.io/gitea/models/packages"
-	container_service "code.gitea.io/gitea/models/packages/container"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/packages"
-	container_module "code.gitea.io/gitea/modules/packages/container"
+	packages_model "gitea.dev/models/packages"
+	container_service "gitea.dev/models/packages/container"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/jsonlimit"
+	"gitea.dev/modules/packages"
+	container_module "gitea.dev/modules/packages/container"
 
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -42,7 +42,7 @@ func UpdateRepositoryNames(ctx context.Context, owner *user_model.User, newOwner
 
 func ParseManifestMetadata(ctx context.Context, rd io.Reader, ownerID int64, imageName string) (*v1.Manifest, *packages_model.PackageFileDescriptor, *container_module.Metadata, error) {
 	var manifest v1.Manifest
-	if err := json.NewDecoder(rd).Decode(&manifest); err != nil {
+	if err := jsonlimit.DecodeWithLimit(rd, 10*1024*1024, &manifest); err != nil {
 		return nil, nil, nil, err
 	}
 	configDescriptor, err := container_service.GetContainerBlob(ctx, &container_service.BlobSearchOptions{

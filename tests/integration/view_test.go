@@ -4,17 +4,43 @@
 package integration
 
 import (
+	"encoding/base64"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
-	"code.gitea.io/gitea/tests"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/structs"
+	"gitea.dev/modules/test"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/context"
+	"gitea.dev/tests"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRenderFileSVGIsInImgTag(t *testing.T) {
+func TestVersion(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.AppVer, "test-version-1")()
+	req := NewRequest(t, "GET", "/api/v1/version")
+	resp := MakeRequest(t, req, http.StatusOK)
 
+	version := DecodeJSON(t, resp, &structs.ServerVersion{})
+	assert.Equal(t, setting.AppVer, version.Version)
+}
+
+func TestView(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	t.Run("RenderFileSVGIsInImgTag", testRenderFileSVGIsInImgTag)
+	t.Run("CommitListActions", testCommitListActions)
+	t.Run("SecurityHeadersDefaults", testSecurityHeadersDefaults)
+	t.Run("SiteManifest", testSiteManifest)
+	t.Run("CurrentURL", testViewPageCurrentURL)
+}
+
+func testRenderFileSVGIsInImgTag(t *testing.T) {
 	session := loginUser(t, "user2")
 
 	req := NewRequest(t, "GET", "/user2/repo2/src/branch/master/line.svg")
@@ -26,8 +52,7 @@ func TestRenderFileSVGIsInImgTag(t *testing.T) {
 	assert.Equal(t, "/user2/repo2/raw/branch/master/line.svg", src)
 }
 
-func TestCommitListActions(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
+func testCommitListActions(t *testing.T) {
 	session := loginUser(t, "user2")
 
 	t.Run("WikiRevisionList", func(t *testing.T) {
@@ -64,4 +89,56 @@ func TestCommitListActions(t *testing.T) {
 		AssertHTMLElement(t, htmlDoc, `.commit-list .view-single-diff`, true)
 		AssertHTMLElement(t, htmlDoc, `.commit-list .view-commit-path`, true)
 	})
+}
+
+func testSecurityHeadersDefaults(t *testing.T) {
+	assertSecurityHeaders := func(t *testing.T, uri string) {
+		req := NewRequest(t, "GET", uri)
+		resp := MakeRequest(t, req, http.StatusOK)
+		assert.Equal(t, "nosniff", resp.Header().Get("X-Content-Type-Options"))
+		assert.Equal(t, "SAMEORIGIN", resp.Header().Get("X-Frame-Options"))
+	}
+	assertSecurityHeaders(t, "/")
+	assertSecurityHeaders(t, "/api/v1/version")
+	assertSecurityHeaders(t, "/assets/img/favicon.png")
+}
+
+func testSiteManifest(t *testing.T) {
+	req := NewRequest(t, "GET", "/")
+	resp := MakeRequest(t, req, http.StatusOK)
+	manifestURL, _ := NewHTMLParser(t, resp.Body).Find(`link[rel="manifest"]`).Attr("href")
+	manifestBase64, ok := strings.CutPrefix(manifestURL, "data:application/manifest+json;base64,")
+	require.True(t, ok)
+	manifestJSON, err := base64.StdEncoding.DecodeString(manifestBase64)
+	require.NoError(t, err)
+
+	assetBase := strings.TrimSuffix(setting.AppURL, "/")
+	expectedJSON := fmt.Sprintf(`{
+		"name": %q,
+		"short_name": %q,
+		"start_url": %q,
+		"icons": [
+			{"src": %q, "type": "image/png",     "sizes": "512x512"},
+			{"src": %q, "type": "image/svg+xml", "sizes": "512x512"}
+		]
+	}`,
+		setting.AppName,
+		setting.AppName,
+		setting.AppURL,
+		assetBase+"/assets/img/logo.png",
+		assetBase+"/assets/img/logo.svg",
+	)
+	assert.JSONEq(t, expectedJSON, string(manifestJSON))
+}
+
+func testViewPageCurrentURL(t *testing.T) {
+	defer test.MockVariableValue(&setting.AppSubURL, "/subpath")()
+	var currentURL string
+	web.RouteMock(web.MockAfterMiddlewares, func(ctx *context.Context) {
+		// Some custom template users need this template variable to construct links in their templates
+		currentURL, _ = ctx.Data["CurrentURL"].(string)
+	})
+	defer web.RouteMockReset()
+	MakeRequest(t, NewRequest(t, "GET", "/user2?k=v"), http.StatusOK)
+	assert.Equal(t, "/subpath/user2?k=v", currentURL)
 }

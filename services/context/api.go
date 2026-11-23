@@ -13,17 +13,19 @@ import (
 	"strconv"
 	"strings"
 
-	"code.gitea.io/gitea/models/unit"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/cache"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/gitrepo"
-	"code.gitea.io/gitea/modules/httpcache"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	web_types "code.gitea.io/gitea/modules/web/types"
+	"gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/cache"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/httpcache"
+	"gitea.dev/modules/httplib"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/paginator"
+	"gitea.dev/modules/reqctx"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	web_types "gitea.dev/modules/web/types"
 )
 
 // APIContext is a specific context for API service
@@ -41,15 +43,14 @@ type APIContext struct {
 
 	ContextUser *user_model.User // the user which is being visited, in most cases it differs from Doer
 
-	Repo       *Repository
-	Org        *APIOrganization
-	Package    *Package
-	PublicOnly bool // Whether the request is for a public endpoint
+	Repo    *Repository
+	Org     *APIOrganization
+	Package *Package
 }
 
 func init() {
 	web.RegisterResponseStatusProvider[*APIContext](func(req *http.Request) web_types.ResponseStatusProvider {
-		return req.Context().Value(apiContextKey).(*APIContext)
+		return GetAPIContext(req)
 	})
 }
 
@@ -65,83 +66,32 @@ type APIError struct {
 	URL     string `json:"url"`
 }
 
-// APIValidationError is error format response related to input validation
-// swagger:response validationError
-type APIValidationError struct {
-	Message string `json:"message"`
-	URL     string `json:"url"`
-}
-
-// APIInvalidTopicsError is error format response to invalid topics
-// swagger:response invalidTopicsError
-type APIInvalidTopicsError struct {
-	Message       string   `json:"message"`
-	InvalidTopics []string `json:"invalidTopics"`
-}
-
 // APIEmpty is an empty response
 // swagger:response empty
 type APIEmpty struct{}
-
-// APIForbiddenError is a forbidden error response
-// swagger:response forbidden
-type APIForbiddenError struct {
-	APIError
-}
-
-// APINotFound is a not found empty response
-// swagger:response notFound
-type APINotFound struct{}
-
-// APIConflict is a conflict empty response
-// swagger:response conflict
-type APIConflict struct{}
-
-// APIRedirect is a redirect response
-// swagger:response redirect
-type APIRedirect struct{}
 
 // APIString is a string response
 // swagger:response string
 type APIString string
 
-// APIRepoArchivedError is an error that is raised when an archived repo should be modified
-// swagger:response repoArchivedError
-type APIRepoArchivedError struct {
-	APIError
-}
-
-// APIErrorInternal responds with error message, status is 500
-func (ctx *APIContext) APIErrorInternal(err error) {
-	ctx.apiErrorInternal(1, err)
-}
-
-func (ctx *APIContext) apiErrorInternal(skip int, err error) {
-	log.ErrorWithSkip(skip+1, "InternalServerError: %v", err)
-
-	var message string
-	if !setting.IsProd || (ctx.Doer != nil && ctx.Doer.IsAdmin) {
-		message = err.Error()
-	}
-
-	ctx.JSON(http.StatusInternalServerError, APIError{
-		Message: message,
+// APIErrorNotFound handles 404s for APIContext
+func (ctx *APIContext) APIErrorNotFound(msg ...string) {
+	ctx.JSON(http.StatusNotFound, APIError{
+		Message: util.OptionalArg(msg, "not found"),
 		URL:     setting.API.SwaggerURL,
 	})
 }
 
-// APIError responds with an error message to client with given obj as the message.
+// APIError responds with an error message to client.
 // If status is 500, also it prints error to log.
-func (ctx *APIContext) APIError(status int, obj any) {
-	var message string
-	if err, ok := obj.(error); ok {
-		message = err.Error()
-	} else {
-		message = fmt.Sprintf("%s", obj)
-	}
+func (ctx *APIContext) APIError(status int, msg string) {
+	ctx.apiError(1, status, msg)
+}
 
+func (ctx *APIContext) apiError(skip, status int, msg string) {
+	message := msg
 	if status == http.StatusInternalServerError {
-		log.ErrorWithSkip(1, "APIError: %s", message)
+		log.ErrorWithSkip(skip+1, "APIError: %s", message)
 
 		if setting.IsProd && !(ctx.Doer != nil && ctx.Doer.IsAdmin) {
 			message = ""
@@ -154,37 +104,53 @@ func (ctx *APIContext) APIError(status int, obj any) {
 	})
 }
 
+// APIErrorAuto use error check function to determine the response code
+func (ctx *APIContext) APIErrorAuto(err error) {
+	ctx.apiErrorAuto(1, err)
+}
+
+func (ctx *APIContext) apiErrorAuto(skip int, err error) {
+	if errMsg, code := util.ErrorUnwrapForUser(err, ctx.Locale); errMsg != "" {
+		ctx.apiError(skip+1, code, errMsg)
+		return
+	}
+	ctx.apiError(skip+1, http.StatusInternalServerError, err.Error())
+}
+
+func (ctx *APIContext) APIErrorInternal(err error) {
+	ctx.apiErrorAuto(1, err)
+}
+
 type apiContextKeyType struct{}
 
 var apiContextKey = apiContextKeyType{}
 
 // GetAPIContext returns a context for API routes
 func GetAPIContext(req *http.Request) *APIContext {
-	return req.Context().Value(apiContextKey).(*APIContext)
+	return reqctx.MustContextValue[*APIContext](req.Context(), apiContextKey)
 }
 
-func genAPILinks(curURL *url.URL, total, pageSize, curPage int) []string {
-	page := NewPagination(total, pageSize, curPage, 0)
-	paginater := page.Paginater
+func genAPILinks(curURL *url.URL, total int64, pageSize, curPage int) []string {
+	p := paginator.New(int(total), pageSize, curPage, 0)
 	links := make([]string, 0, 4)
 
-	if paginater.HasNext() {
+	if p.HasNext() {
 		u := *curURL
 		queries := u.Query()
-		queries.Set("page", strconv.Itoa(paginater.Next()))
+		queries.Set("page", strconv.Itoa(p.Next()))
 		u.RawQuery = queries.Encode()
 
 		links = append(links, fmt.Sprintf("<%s%s>; rel=\"next\"", setting.AppURL, u.RequestURI()[1:]))
 	}
-	if !paginater.IsLast() {
+	if !p.IsLast() {
 		u := *curURL
 		queries := u.Query()
-		queries.Set("page", strconv.Itoa(paginater.TotalPages()))
+		queries.Set("page", strconv.Itoa(p.TotalPages()))
 		u.RawQuery = queries.Encode()
 
 		links = append(links, fmt.Sprintf("<%s%s>; rel=\"last\"", setting.AppURL, u.RequestURI()[1:]))
 	}
-	if !paginater.IsFirst() {
+	if !p.IsFirst() {
 		u := *curURL
 		queries := u.Query()
 		queries.Set("page", "1")
@@ -192,10 +158,10 @@ func genAPILinks(curURL *url.URL, total, pageSize, curPage int) []string {
 
 		links = append(links, fmt.Sprintf("<%s%s>; rel=\"first\"", setting.AppURL, u.RequestURI()[1:]))
 	}
-	if paginater.HasPrevious() {
+	if p.HasPrevious() {
 		u := *curURL
 		queries := u.Query()
-		queries.Set("page", strconv.Itoa(paginater.Previous()))
+		queries.Set("page", strconv.Itoa(p.Previous()))
 		u.RawQuery = queries.Encode()
 
 		links = append(links, fmt.Sprintf("<%s%s>; rel=\"prev\"", setting.AppURL, u.RequestURI()[1:]))
@@ -204,7 +170,8 @@ func genAPILinks(curURL *url.URL, total, pageSize, curPage int) []string {
 }
 
 // SetLinkHeader sets pagination link header by given total number and page size.
-func (ctx *APIContext) SetLinkHeader(total, pageSize int) {
+// "count" is usually from database result "count int64", so it also uses int64,
+func (ctx *APIContext) SetLinkHeader(total int64, pageSize int) {
 	links := genAPILinks(ctx.Req.URL, total, pageSize, ctx.FormInt("page"))
 
 	if len(links) > 0 {
@@ -224,8 +191,8 @@ func APIContexter() func(http.Handler) http.Handler {
 				Repo:  &Repository{},
 				Org:   &APIOrganization{},
 			}
-
 			ctx.SetContextValue(apiContextKey, ctx)
+			httplib.MarkRequestSupportPublicURL(ctx)
 
 			// FIXME: GLOBAL-PARSE-FORM: see more details in another FIXME comment
 			if ctx.Req.Method == http.MethodPost && strings.Contains(ctx.Req.Header.Get("Content-Type"), "multipart/form-data") {
@@ -234,36 +201,10 @@ func APIContexter() func(http.Handler) http.Handler {
 				}
 			}
 
-			httpcache.SetCacheControlInHeader(ctx.Resp.Header(), &httpcache.CacheControlOptions{NoTransform: true})
-			ctx.Resp.Header().Set(`X-Frame-Options`, setting.CORSConfig.XFrameOptions)
-
+			httpcache.SetCacheControlInHeader(ctx.Resp.Header(), &httpcache.CacheControlOptions{})
 			next.ServeHTTP(ctx.Resp, ctx.Req)
 		})
 	}
-}
-
-// APIErrorNotFound handles 404s for APIContext
-// String will replace message, errors will be added to a slice
-func (ctx *APIContext) APIErrorNotFound(objs ...any) {
-	var message string
-	var errs []string
-	for _, obj := range objs {
-		// Ignore nil
-		if obj == nil {
-			continue
-		}
-
-		if err, ok := obj.(error); ok {
-			errs = append(errs, err.Error())
-		} else {
-			message = obj.(string)
-		}
-	}
-	ctx.JSON(http.StatusNotFound, map[string]any{
-		"message": util.IfZero(message, "not found"), // do not use locale in API
-		"url":     setting.API.SwaggerURL,
-		"errors":  errs,
-	})
 }
 
 // ReferencesGitRepo injects the GitRepo into the Context
@@ -278,7 +219,7 @@ func ReferencesGitRepo(allowEmpty ...bool) func(ctx *APIContext) {
 		// For API calls.
 		if ctx.Repo.GitRepo == nil {
 			var err error
-			ctx.Repo.GitRepo, err = gitrepo.RepositoryFromRequestContextOrOpen(ctx, ctx.Repo.Repository)
+			ctx.Repo.GitRepo, err = git.RepositoryFromRequestContextOrOpen(ctx, ctx.Repo.Repository)
 			if err != nil {
 				ctx.APIErrorInternal(err)
 				return
@@ -305,11 +246,11 @@ func RepoRefForAPI(next http.Handler) http.Handler {
 		var err error
 		switch refType {
 		case git.RefTypeBranch:
-			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetBranchCommit(refName)
+			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetBranchCommit(ctx, refName)
 		case git.RefTypeTag:
-			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetTagCommit(refName)
+			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetTagCommit(ctx, refName)
 		case git.RefTypeCommit:
-			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetCommit(refName)
+			ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetCommit(ctx, refName)
 		}
 		if ctx.Repo.Commit == nil || errors.Is(err, util.ErrNotExist) {
 			ctx.APIErrorNotFound("unable to find a git ref")
@@ -323,35 +264,6 @@ func RepoRefForAPI(next http.Handler) http.Handler {
 	})
 }
 
-// HasAPIError returns true if error occurs in form validation.
-func (ctx *APIContext) HasAPIError() bool {
-	hasErr, ok := ctx.Data["HasError"]
-	if !ok {
-		return false
-	}
-	return hasErr.(bool)
-}
-
-// GetErrMsg returns error message in form validation.
-func (ctx *APIContext) GetErrMsg() string {
-	msg, _ := ctx.Data["ErrorMsg"].(string)
-	if msg == "" {
-		msg = "invalid form data"
-	}
-	return msg
-}
-
-// NotFoundOrServerError use error check function to determine if the error
-// is about not found. It responds with 404 status code for not found error,
-// or error context description for logging purpose of 500 server error.
-func (ctx *APIContext) NotFoundOrServerError(err error) {
-	if errors.Is(err, util.ErrNotExist) {
-		ctx.JSON(http.StatusNotFound, nil)
-		return
-	}
-	ctx.APIErrorInternal(err)
-}
-
 // IsUserSiteAdmin returns true if current user is a site admin
 func (ctx *APIContext) IsUserSiteAdmin() bool {
 	return ctx.IsSigned && ctx.Doer.IsAdmin
@@ -359,10 +271,10 @@ func (ctx *APIContext) IsUserSiteAdmin() bool {
 
 // IsUserRepoAdmin returns true if current user is admin in current repo
 func (ctx *APIContext) IsUserRepoAdmin() bool {
-	return ctx.Repo.IsAdmin()
+	return ctx.Repo.Permission.IsAdmin()
 }
 
 // IsUserRepoWriter returns true if current user has "write" privilege in current repo
 func (ctx *APIContext) IsUserRepoWriter(unitTypes []unit.Type) bool {
-	return slices.ContainsFunc(unitTypes, ctx.Repo.CanWrite)
+	return slices.ContainsFunc(unitTypes, ctx.Repo.Permission.CanWrite)
 }

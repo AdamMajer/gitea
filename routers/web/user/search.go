@@ -6,12 +6,12 @@ package user
 import (
 	"net/http"
 
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/convert"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/services/context"
+	"gitea.dev/services/convert"
 )
 
 // SearchCandidates searches candidate users for dropdown list
@@ -28,7 +28,7 @@ func SearchCandidates(ctx *context.Context) {
 		ListOptions: db.ListOptions{PageSize: setting.UI.MembersPagingNum},
 	})
 	if err != nil {
-		ctx.ServerError("Unable to search users", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.JSON(http.StatusOK, map[string]any{"data": convert.ToUsers(ctx, ctx.Doer, users)})

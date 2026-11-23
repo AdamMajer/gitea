@@ -4,21 +4,22 @@
 package fileicon_test
 
 import (
+	"os"
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
-	"code.gitea.io/gitea/modules/fileicon"
-	"code.gitea.io/gitea/modules/git"
+	"gitea.dev/modules/fileicon"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/setting"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
-	unittest.MainTest(m, &unittest.TestOptions{FixtureFiles: []string{}})
+	setting.SetupGiteaTestEnv()
+	os.Exit(m.Run())
 }
 
 func TestFindIconName(t *testing.T) {
-	unittest.PrepareTestEnv(t)
 	p := fileicon.DefaultMaterialIconProvider()
 	assert.Equal(t, "php", p.FindIconName(&fileicon.EntryInfo{BaseName: "foo.php", EntryMode: git.EntryModeBlob}))
 	assert.Equal(t, "php", p.FindIconName(&fileicon.EntryInfo{BaseName: "foo.PHP", EntryMode: git.EntryModeBlob}))

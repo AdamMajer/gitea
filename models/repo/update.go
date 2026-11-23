@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/util"
 )
 
 // UpdateRepositoryOwnerNames updates repository owner_names (this should only be used when the ownerName has changed case)
@@ -77,7 +77,7 @@ func IsErrRepoAlreadyExist(err error) bool {
 }
 
 func (err ErrRepoAlreadyExist) Error() string {
-	return fmt.Sprintf("repository already exists [uname: %s, name: %s]", err.Uname, err.Name)
+	return fmt.Sprintf("repository already exists [owner: %s, repo: %s]", err.Uname, err.Name)
 }
 
 func (err ErrRepoAlreadyExist) Unwrap() error {

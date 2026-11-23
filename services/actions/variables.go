@@ -6,20 +6,22 @@ package actions
 import (
 	"context"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	"code.gitea.io/gitea/modules/util"
-	secret_service "code.gitea.io/gitea/services/secrets"
+	actions_model "gitea.dev/models/actions"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/audit"
+	secret_service "gitea.dev/services/secrets"
 )
 
-func CreateVariable(ctx context.Context, ownerID, repoID int64, name, data, description string) (*actions_model.ActionVariable, error) {
+func CreateVariable(ctx context.Context, scope actions_model.BelongingScope, name, data, description string) (*actions_model.ActionVariable, error) {
 	if err := secret_service.ValidateName(name); err != nil {
 		return nil, err
 	}
 
-	v, err := actions_model.InsertVariable(ctx, ownerID, repoID, name, util.ReserveLineBreakForTextarea(data), description)
+	v, err := actions_model.InsertVariable(ctx, scope, name, util.NormalizeStringEOL(data), description)
 	if err != nil {
 		return nil, err
 	}
+	audit.RecordScopedByID(ctx, v.OwnerID, v.RepoID, audit.VariableAdd, "variable", v.Name)
 
 	return v, nil
 }
@@ -29,26 +31,29 @@ func UpdateVariableNameData(ctx context.Context, variable *actions_model.ActionV
 		return false, err
 	}
 
-	variable.Data = util.ReserveLineBreakForTextarea(variable.Data)
+	variable.Data = util.NormalizeStringEOL(variable.Data)
 
-	return actions_model.UpdateVariableCols(ctx, variable, "name", "data", "description")
+	updated, err := actions_model.UpdateVariableCols(ctx, variable, "name", "data", "description")
+	if updated {
+		audit.RecordScopedByID(ctx, variable.OwnerID, variable.RepoID, audit.VariableUpdate, "variable", variable.Name)
+	}
+	return updated, err
 }
 
-func DeleteVariableByID(ctx context.Context, variableID int64) error {
-	return actions_model.DeleteVariable(ctx, variableID)
+func DeleteVariable(ctx context.Context, variable *actions_model.ActionVariable) error {
+	if err := actions_model.DeleteVariable(ctx, variable.ID); err != nil {
+		return err
+	}
+	audit.RecordScopedByID(ctx, variable.OwnerID, variable.RepoID, audit.VariableRemove, "variable", variable.Name)
+	return nil
 }
 
-func DeleteVariableByName(ctx context.Context, ownerID, repoID int64, name string) error {
-	v, err := GetVariable(ctx, actions_model.FindVariablesOpts{
-		OwnerID: ownerID,
-		RepoID:  repoID,
-		Name:    name,
-	})
+func DeleteVariableByName(ctx context.Context, scope actions_model.BelongingScope, name string) error {
+	v, err := GetVariable(ctx, actions_model.FindVariablesOpts{BelongingScope: scope, Name: name})
 	if err != nil {
 		return err
 	}
-
-	return actions_model.DeleteVariable(ctx, v.ID)
+	return DeleteVariable(ctx, v)
 }
 
 func GetVariable(ctx context.Context, opts actions_model.FindVariablesOpts) (*actions_model.ActionVariable, error) {

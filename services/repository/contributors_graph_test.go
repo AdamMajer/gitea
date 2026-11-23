@@ -4,13 +4,14 @@
 package repository
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unittest"
-	"code.gitea.io/gitea/modules/cache"
-	"code.gitea.io/gitea/modules/setting"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unittest"
+	"gitea.dev/modules/cache"
+	"gitea.dev/modules/setting"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -23,15 +24,13 @@ func TestRepository_ContributorsGraph(t *testing.T) {
 	mockCache, err := cache.NewStringCache(setting.Cache{})
 	assert.NoError(t, err)
 
-	generateContributorStats(nil, mockCache, "key", repo, "404ref")
-	var data map[string]*ContributorData
-	_, getErr := mockCache.GetJSON("key", &data)
-	assert.NotNil(t, getErr)
-	assert.ErrorContains(t, getErr.ToError(), "object does not exist")
+	_, err = GetContributorStats(t.Context(), mockCache, repo, "404ref")
+	assert.ErrorContains(t, err, "object does not exist")
+	_, locked := generateLock.Load(fmt.Sprintf(contributorStatsCacheKey, repo.FullName(), "404ref"))
+	assert.False(t, locked)
 
-	generateContributorStats(nil, mockCache, "key2", repo, "master")
-	exist, _ := mockCache.GetJSON("key2", &data)
-	assert.True(t, exist)
+	data, err := GetContributorStats(t.Context(), mockCache, repo, "master")
+	assert.NoError(t, err)
 	var keys []string
 	for k := range data {
 		keys = append(keys, k)

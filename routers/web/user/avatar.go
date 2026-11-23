@@ -6,10 +6,10 @@ package user
 import (
 	"time"
 
-	"code.gitea.io/gitea/models/avatars"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/httpcache"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/models/avatars"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/httpcache"
+	"gitea.dev/services/context"
 )
 
 func cacheableRedirect(ctx *context.Context, location string) {
@@ -27,7 +27,7 @@ func AvatarByUsernameSize(ctx *context.Context) {
 	if user == nil {
 		var err error
 		if user, err = user_model.GetUserByName(ctx, username); err != nil {
-			ctx.NotFoundOrServerError("GetUserByName", user_model.IsErrUserNotExist, err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
@@ -39,7 +39,7 @@ func AvatarByEmailHash(ctx *context.Context) {
 	hash := ctx.PathParam("hash")
 	email, err := avatars.GetEmailForHash(ctx, hash)
 	if err != nil {
-		ctx.ServerError("invalid avatar hash: "+hash, err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	size := ctx.FormInt("size")

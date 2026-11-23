@@ -11,29 +11,28 @@ import (
 	"slices"
 	"strings"
 
-	"code.gitea.io/gitea/models/db"
-	git_model "code.gitea.io/gitea/models/git"
-	"code.gitea.io/gitea/models/organization"
-	access_model "code.gitea.io/gitea/models/perm/access"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/cache"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	repo_module "code.gitea.io/gitea/modules/repository"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/convert"
-	"code.gitea.io/gitea/services/forms"
-	repo_service "code.gitea.io/gitea/services/repository"
-	archiver_service "code.gitea.io/gitea/services/repository/archiver"
-	commitstatus_service "code.gitea.io/gitea/services/repository/commitstatus"
+	"gitea.dev/models/db"
+	git_model "gitea.dev/models/git"
+	"gitea.dev/models/organization"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	repo_module "gitea.dev/modules/repository"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/context"
+	"gitea.dev/services/convert"
+	"gitea.dev/services/forms"
+	repo_service "gitea.dev/services/repository"
+	archiver_service "gitea.dev/services/repository/archiver"
+	commitstatus_service "gitea.dev/services/repository/commitstatus"
 )
 
 const (
@@ -44,14 +43,14 @@ const (
 // MustBeNotEmpty render when a repo is a empty git dir
 func MustBeNotEmpty(ctx *context.Context) {
 	if ctx.Repo.Repository.IsEmpty {
-		ctx.NotFound(nil)
+		ctx.NotFound()
 	}
 }
 
 // MustBeEditable check that repo can be edited
 func MustBeEditable(ctx *context.Context) {
-	if !ctx.Repo.Repository.CanEnableEditor() {
-		ctx.NotFound(nil)
+	if !ctx.Repo.Repository.CanContentChange() {
+		ctx.NotFound()
 		return
 	}
 }
@@ -59,30 +58,14 @@ func MustBeEditable(ctx *context.Context) {
 // MustBeAbleToUpload check that repo can be uploaded to
 func MustBeAbleToUpload(ctx *context.Context) {
 	if !setting.Repository.Upload.Enabled {
-		ctx.NotFound(nil)
+		ctx.NotFound()
 	}
-}
-
-func CommitInfoCache(ctx *context.Context) {
-	var err error
-	ctx.Repo.Commit, err = ctx.Repo.GitRepo.GetBranchCommit(ctx.Repo.Repository.DefaultBranch)
-	if err != nil {
-		ctx.ServerError("GetBranchCommit", err)
-		return
-	}
-	ctx.Repo.CommitsCount, err = ctx.Repo.GetCommitsCount(ctx)
-	if err != nil {
-		ctx.ServerError("GetCommitsCount", err)
-		return
-	}
-	ctx.Data["CommitsCount"] = ctx.Repo.CommitsCount
-	ctx.Repo.GitRepo.LastCommitCache = git.NewLastCommitCache(ctx.Repo.CommitsCount, ctx.Repo.Repository.FullName(), ctx.Repo.GitRepo, cache.GetCache())
 }
 
 func checkContextUser(ctx *context.Context, uid int64) *user_model.User {
 	orgs, err := organization.GetOrgsCanCreateRepoByUserID(ctx, ctx.Doer.ID)
 	if err != nil {
-		ctx.ServerError("GetOrgsCanCreateRepoByUserID", err)
+		ctx.ServerErrorAuto(err)
 		return nil
 	}
 
@@ -105,7 +88,7 @@ func checkContextUser(ctx *context.Context, uid int64) *user_model.User {
 	}
 
 	if err != nil {
-		ctx.ServerError("GetUserByID", fmt.Errorf("[%d]: %w", uid, err))
+		ctx.ServerErrorAuto(fmt.Errorf("[%d]: %w", uid, err))
 		return nil
 	}
 
@@ -117,7 +100,7 @@ func checkContextUser(ctx *context.Context, uid int64) *user_model.User {
 	if !ctx.Doer.IsAdmin {
 		canCreate, err := organization.OrgFromUser(org).CanCreateOrgRepo(ctx, ctx.Doer.ID)
 		if err != nil {
-			ctx.ServerError("CanCreateOrgRepo", err)
+			ctx.ServerErrorAuto(err)
 			return nil
 		} else if !canCreate {
 			ctx.HTTPError(http.StatusForbidden)
@@ -152,7 +135,7 @@ func createCommon(ctx *context.Context) {
 	ctx.Data["CanCreateRepoInDoer"] = ctx.Doer.CanCreateRepoIn(ctx.Doer)
 	ctx.Data["MaxCreationLimitOfDoer"] = ctx.Doer.MaxCreationLimit()
 	ctx.Data["SupportedObjectFormats"] = git.DefaultFeatures().SupportedObjectFormats
-	ctx.Data["DefaultObjectFormat"] = git.Sha1ObjectFormat
+	ctx.Data["DefaultObjectFormat"] = git.ObjectFormatFromName(setting.Repository.DefaultObjectFormat)
 }
 
 // Create render creating repository page
@@ -181,42 +164,35 @@ func Create(ctx *context.Context) {
 	ctx.HTML(http.StatusOK, tplCreate)
 }
 
-func handleCreateError(ctx *context.Context, owner *user_model.User, err error, name string, tpl templates.TplName, form any) {
+func handleCreateError(ctx *context.Context, owner *user_model.User, err error, tpl templates.TplName, form any) {
+	var errNameReserved db.ErrNameReserved
+	var errNamePatternNotAllowed db.ErrNamePatternNotAllowed
 	switch {
 	case repo_model.IsErrReachLimitOfRepo(err):
 		maxCreationLimit := owner.MaxCreationLimit()
 		msg := ctx.TrN(maxCreationLimit, "repo.form.reach_limit_of_creation_1", "repo.form.reach_limit_of_creation_n", maxCreationLimit)
-		ctx.RenderWithErr(msg, tpl, form)
+		ctx.RenderWithErrDeprecated(msg, tpl, form)
 	case repo_model.IsErrRepoAlreadyExist(err):
 		ctx.Data["Err_RepoName"] = true
-		ctx.RenderWithErr(ctx.Tr("form.repo_name_been_taken"), tpl, form)
+		ctx.RenderWithErrDeprecated(ctx.Tr("form.repo_name_been_taken"), tpl, form)
 	case repo_model.IsErrRepoFilesAlreadyExist(err):
 		ctx.Data["Err_RepoName"] = true
-		switch {
-		case ctx.IsUserSiteAdmin() || (setting.Repository.AllowAdoptionOfUnadoptedRepositories && setting.Repository.AllowDeleteOfUnadoptedRepositories):
-			ctx.RenderWithErr(ctx.Tr("form.repository_files_already_exist.adopt_or_delete"), tpl, form)
-		case setting.Repository.AllowAdoptionOfUnadoptedRepositories:
-			ctx.RenderWithErr(ctx.Tr("form.repository_files_already_exist.adopt"), tpl, form)
-		case setting.Repository.AllowDeleteOfUnadoptedRepositories:
-			ctx.RenderWithErr(ctx.Tr("form.repository_files_already_exist.delete"), tpl, form)
-		default:
-			ctx.RenderWithErr(ctx.Tr("form.repository_files_already_exist"), tpl, form)
-		}
-	case db.IsErrNameReserved(err):
+		ctx.RenderWithErrDeprecated(ctx.Tr("form.repository_files_already_exist"), tpl, form)
+	case errors.As(err, &errNameReserved):
 		ctx.Data["Err_RepoName"] = true
-		ctx.RenderWithErr(ctx.Tr("repo.form.name_reserved", err.(db.ErrNameReserved).Name), tpl, form)
-	case db.IsErrNamePatternNotAllowed(err):
+		ctx.RenderWithErrDeprecated(ctx.Tr("repo.form.name_reserved", errNameReserved.Name), tpl, form)
+	case errors.As(err, &errNamePatternNotAllowed):
 		ctx.Data["Err_RepoName"] = true
-		ctx.RenderWithErr(ctx.Tr("repo.form.name_pattern_not_allowed", err.(db.ErrNamePatternNotAllowed).Pattern), tpl, form)
+		ctx.RenderWithErrDeprecated(ctx.Tr("repo.form.name_pattern_not_allowed", errNamePatternNotAllowed.Pattern), tpl, form)
 	default:
-		ctx.ServerError(name, err)
+		ctx.ServerErrorAuto(err)
 	}
 }
 
 // CreatePost response for creating repository
 func CreatePost(ctx *context.Context) {
 	createCommon(ctx)
-	form := web.GetForm(ctx).(*forms.CreateRepoForm)
+	form := web.GetForm[*forms.CreateRepoForm](ctx)
 
 	ctxUser := checkContextUser(ctx, form.UID)
 	if ctx.Written() {
@@ -254,7 +230,7 @@ func CreatePost(ctx *context.Context) {
 		}
 
 		if !opts.IsValid() {
-			ctx.RenderWithErr(ctx.Tr("repo.template.one_item"), tplCreate, form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("repo.template.one_item"), tplCreate, form)
 			return
 		}
 
@@ -264,7 +240,7 @@ func CreatePost(ctx *context.Context) {
 		}
 
 		if !templateRepo.IsTemplate {
-			ctx.RenderWithErr(ctx.Tr("repo.template.invalid"), tplCreate, form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("repo.template.invalid"), tplCreate, form)
 			return
 		}
 
@@ -296,20 +272,21 @@ func CreatePost(ctx *context.Context) {
 		}
 	}
 
-	handleCreateError(ctx, ctxUser, err, "CreatePost", tplCreate, &form)
+	handleCreateError(ctx, ctxUser, err, tplCreate, &form)
 }
 
-func handleActionError(ctx *context.Context, err error) {
+func handleRepoActionError(ctx *context.Context, err error) {
+	var errLimitReached repo_service.LimitReachedError
 	switch {
 	case errors.Is(err, user_model.ErrBlockedUser):
-		ctx.Flash.Error(ctx.Tr("repo.action.blocked_user"))
-	case repo_service.IsRepositoryLimitReached(err):
-		limit := err.(repo_service.LimitReachedError).Limit
-		ctx.Flash.Error(ctx.TrN(limit, "repo.form.reach_limit_of_creation_1", "repo.form.reach_limit_of_creation_n", limit))
+		ctx.JSONError(ctx.Tr("repo.action.blocked_user"))
+	case errors.As(err, &errLimitReached):
+		limit := errLimitReached.Limit
+		ctx.JSONError(ctx.TrN(limit, "repo.form.reach_limit_of_creation_1", "repo.form.reach_limit_of_creation_n", limit))
 	case errors.Is(err, util.ErrPermissionDenied):
-		ctx.HTTPError(http.StatusNotFound)
+		ctx.JSONError(ctx.Tr("error.permission_denied"))
 	default:
-		ctx.ServerError(fmt.Sprintf("Action (%s)", ctx.PathParam("action")), err)
+		ctx.ServerErrorAuto(err)
 	}
 }
 
@@ -322,12 +299,12 @@ func RedirectDownload(ctx *context.Context) {
 	tagNames := []string{vTag}
 	curRepo := ctx.Repo.Repository
 	releases, err := db.Find[repo_model.Release](ctx, repo_model.FindReleasesOptions{
-		IncludeDrafts: ctx.Repo.CanWrite(unit.TypeReleases),
+		IncludeDrafts: ctx.Repo.Permission.CanWrite(unit.TypeReleases),
 		RepoID:        curRepo.ID,
 		TagNames:      tagNames,
 	})
 	if err != nil {
-		ctx.ServerError("RedirectDownload", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if len(releases) == 1 {
@@ -344,7 +321,7 @@ func RedirectDownload(ctx *context.Context) {
 	} else if len(releases) == 0 && vTag == "latest" {
 		// GitHub supports the alias "latest" for the latest release
 		// We only fetch the latest release if the tag is "latest" and no release with the tag "latest" exists
-		release, err := repo_model.GetLatestReleaseByRepoID(ctx, ctx.Repo.Repository.ID)
+		release, err := repo_model.GetLatestRelease(ctx, ctx.Repo.Repository)
 		if err != nil {
 			ctx.HTTPError(http.StatusNotFound)
 			return
@@ -364,14 +341,18 @@ func RedirectDownload(ctx *context.Context) {
 
 // Download an archive of a repository
 func Download(ctx *context.Context) {
-	aReq, err := archiver_service.NewRequest(ctx.Repo.Repository, ctx.Repo.GitRepo, ctx.PathParam("*"), ctx.FormStrings("path"))
+	if !checkDownloadTokenScope(ctx) {
+		return
+	}
+
+	aReq, err := archiver_service.NewRequest(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo, ctx.PathParam("*"), ctx.FormStrings("path"))
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.HTTPError(http.StatusBadRequest, err.Error())
 		} else if errors.Is(err, util.ErrNotExist) {
 			ctx.HTTPError(http.StatusNotFound, err.Error())
 		} else {
-			ctx.ServerError("archiver_service.NewRequest", err)
+			ctx.ServerErrorAuto(err)
 		}
 		return
 	}
@@ -380,7 +361,7 @@ func Download(ctx *context.Context) {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.HTTPError(http.StatusBadRequest, err.Error())
 		} else {
-			ctx.ServerError("archiver_service.ServeRepoArchive", err)
+			ctx.ServerErrorAuto(err)
 		}
 	}
 }
@@ -389,6 +370,10 @@ func Download(ctx *context.Context) {
 // a request that's already in-progress, but the archiver service will just
 // kind of drop it on the floor if this is the case.
 func InitiateDownload(ctx *context.Context) {
+	if !checkDownloadTokenScope(ctx) {
+		return
+	}
+
 	paths := ctx.FormStrings("path")
 	if setting.Repository.StreamArchives || len(paths) > 0 {
 		ctx.JSON(http.StatusOK, map[string]any{
@@ -396,7 +381,7 @@ func InitiateDownload(ctx *context.Context) {
 		})
 		return
 	}
-	aReq, err := archiver_service.NewRequest(ctx.Repo.Repository, ctx.Repo.GitRepo, ctx.PathParam("*"), paths)
+	aReq, err := archiver_service.NewRequest(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo, ctx.PathParam("*"), paths)
 	if err != nil {
 		ctx.HTTPError(http.StatusBadRequest, "invalid archive request")
 		return
@@ -408,12 +393,12 @@ func InitiateDownload(ctx *context.Context) {
 
 	archiver, err := repo_model.GetRepoArchiver(ctx, aReq.Repo.ID, aReq.Type, aReq.CommitID)
 	if err != nil {
-		ctx.ServerError("archiver_service.StartArchive", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if archiver == nil || archiver.Status != repo_model.ArchiverReady {
 		if err := archiver_service.StartArchive(aReq); err != nil {
-			ctx.ServerError("archiver_service.StartArchive", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
@@ -526,15 +511,13 @@ func SearchRepo(ctx *context.Context) {
 
 	ctx.SetTotalCountHeader(count)
 
-	latestCommitStatuses, err := commitstatus_service.FindReposLastestCommitStatuses(ctx, repos)
+	latestCommitStatuses, err := commitstatus_service.FindReposLatestCommitStatuses(ctx, repos)
 	if err != nil {
-		log.Error("FindReposLastestCommitStatuses: %v", err)
+		log.Error("FindReposLatestCommitStatuses: %v", err)
 		ctx.JSON(http.StatusInternalServerError, nil)
 		return
 	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		git_model.CommitStatusesHideActionsURL(ctx, latestCommitStatuses)
-	}
+	git_model.CommitStatusesApplyDoerPermission(ctx, ctx.Doer, latestCommitStatuses)
 
 	results := make([]*repo_service.WebSearchRepository, len(repos))
 	for i, repo := range repos {
@@ -554,7 +537,10 @@ func SearchRepo(ctx *context.Context) {
 		}
 
 		if latestCommitStatuses[i] != nil {
-			results[i].LatestCommitStatus = latestCommitStatuses[i]
+			results[i].LatestCommitStatus = &repo_service.WebSearchCommitStatus{
+				State:     latestCommitStatuses[i].State,
+				TargetURL: latestCommitStatuses[i].TargetURL,
+			}
 			results[i].LocaleLatestCommitStatus = latestCommitStatuses[i].LocaleString(ctx.Locale)
 		}
 	}
@@ -611,7 +597,7 @@ func PrepareBranchList(ctx *context.Context) {
 	}
 	brs, err := git_model.FindBranchNames(ctx, branchOpts)
 	if err != nil {
-		ctx.ServerError("GetBranches", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	// always put default branch on the top if it exists

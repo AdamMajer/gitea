@@ -1,0 +1,24 @@
+name: test
+cache-mode: read
+jobs:
+  zzz:
+    runs-on: linux
+    steps:
+      - run: echo zzz
+  job1:
+    runs-on: linux
+    cache-mode: write
+    steps:
+      - run: uname -a && go version
+  job2:
+    runs-on: linux
+    steps:
+      - run: uname -a && go version
+  job3:
+    runs-on: linux
+    steps:
+      - run: uname -a && go version
+  aaa:
+    runs-on: linux
+    steps:
+      - run: uname -a && go version

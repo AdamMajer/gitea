@@ -22,25 +22,32 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	user_model "code.gitea.io/gitea/models/user"
-	chef_module "code.gitea.io/gitea/modules/packages/chef"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/services/auth"
+	user_model "gitea.dev/models/user"
+	chef_module "gitea.dev/modules/packages/chef"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/auth"
 )
 
 const (
 	maxTimeDifference = 10 * time.Minute
 )
 
-var (
-	algorithmPattern     = regexp.MustCompile(`algorithm=(\w+)`)
-	versionPattern       = regexp.MustCompile(`version=(\d+\.\d+)`)
-	authorizationPattern = regexp.MustCompile(`\AX-Ops-Authorization-(\d+)`)
+var globalVars = sync.OnceValue(func() (ret struct {
+	algorithmPattern     *regexp.Regexp
+	versionPattern       *regexp.Regexp
+	authorizationPattern *regexp.Regexp
+},
+) {
+	ret.algorithmPattern = regexp.MustCompile(`algorithm=(\w+)`)
+	ret.versionPattern = regexp.MustCompile(`version=(\d+\.\d+)`)
+	ret.authorizationPattern = regexp.MustCompile(`\AX-Ops-Authorization-(\d+)`)
+	return ret
+})
 
-	_ auth.Method = &Auth{}
-)
+var _ auth.Method = &Auth{}
 
 // Documentation:
 // https://docs.chef.io/server/api_chef_server/#required-headers
@@ -61,7 +68,7 @@ func (a *Auth) Verify(req *http.Request, w http.ResponseWriter, store auth.DataS
 		return nil, err
 	}
 	if u == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // the auth method is not applicable
 	}
 
 	pub, err := getUserPublicKey(req.Context(), u)
@@ -78,7 +85,12 @@ func (a *Auth) Verify(req *http.Request, w http.ResponseWriter, store auth.DataS
 		return nil, err
 	}
 
-	if err := verifySignedHeaders(req, version, pub.(*rsa.PublicKey)); err != nil {
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("public key is not a RSA key")
+	}
+
+	if err := verifySignedHeaders(req, version, rsaPub); err != nil {
 		return nil, err
 	}
 
@@ -88,7 +100,7 @@ func (a *Auth) Verify(req *http.Request, w http.ResponseWriter, store auth.DataS
 func getUserFromRequest(req *http.Request) (*user_model.User, error) {
 	username := req.Header.Get("X-Ops-Userid")
 	if username == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // the auth method is not applicable
 	}
 
 	return user_model.GetUserByName(req.Context(), username)
@@ -134,7 +146,7 @@ func getSignVersion(req *http.Request) (string, error) {
 		return "", util.NewInvalidArgumentErrorf("X-Ops-Sign header missing")
 	}
 
-	m := versionPattern.FindStringSubmatch(hdr)
+	m := globalVars().versionPattern.FindStringSubmatch(hdr)
 	if len(m) != 2 {
 		return "", util.NewInvalidArgumentErrorf("invalid X-Ops-Sign header")
 	}
@@ -147,7 +159,7 @@ func getSignVersion(req *http.Request) (string, error) {
 
 	version := m[1]
 
-	m = algorithmPattern.FindStringSubmatch(hdr)
+	m = globalVars().algorithmPattern.FindStringSubmatch(hdr)
 	if len(m) == 2 && m[1] != "sha1" && !(m[1] == "sha256" && version == "1.3") {
 		return "", util.NewInvalidArgumentErrorf("unsupported algorithm")
 	}
@@ -176,7 +188,7 @@ func verifySignedHeaders(req *http.Request, version string, pub *rsa.PublicKey) 
 func getAuthorizationData(req *http.Request) ([]byte, error) {
 	valueList := make(map[int]string)
 	for k, vs := range req.Header {
-		if m := authorizationPattern.FindStringSubmatch(k); m != nil {
+		if m := globalVars().authorizationPattern.FindStringSubmatch(k); m != nil {
 			index, _ := strconv.Atoi(m[1])
 			var v string
 			if len(vs) == 0 {

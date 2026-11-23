@@ -5,12 +5,12 @@ package db
 
 import (
 	"fmt"
-	"strconv"
 
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/setting"
 
 	"xorm.io/xorm"
+	"xorm.io/xorm/convert"
 	"xorm.io/xorm/schemas"
 )
 
@@ -74,15 +74,32 @@ WHERE ST.name ='varchar'`)
 	return err
 }
 
-// Cell2Int64 converts a xorm.Cell type to int64,
-// and handles possible irregular cases.
-func Cell2Int64(val xorm.Cell) int64 {
-	switch (*val).(type) {
-	case []uint8:
-		log.Trace("Cell2Int64 ([]uint8): %v", *val)
-
-		v, _ := strconv.ParseInt(string((*val).([]uint8)), 10, 64)
-		return v
+// CellToInt converts a xorm.Cell field value to an int value
+func CellToInt[T ~int | int64](cell xorm.Cell, def T) (ret T, has bool, err error) {
+	if *cell == nil {
+		return def, false, nil
 	}
-	return (*val).(int64)
+	val, err := convert.AsInt64(*cell)
+	if err != nil {
+		return def, false, err
+	}
+	return T(val), true, err
+}
+
+func UnmarshalFromDB(data []byte, v any) bool {
+	if len(data) == 0 {
+		return true
+	}
+	err := json.Unmarshal(data, v)
+	if err != nil {
+		// Even if database value is corrupted, we should not let it cause unnecessary 500 error or block user's operation
+		// Corrupted database value is a really rare case, it should never happen unless site admin manually modified the database.
+		// Although some database values will be printed into logs, it isn't a real problem
+		// because such case should never really happen. If it happens, logging the value
+		// is the only way to tell site admin which record is wrong since there is no other context information,
+		// and then they need to re-create the config (with new secrets)
+		setting.PanicInDevOrTesting("UnmarshalFromDB %q failed: %v", string(data), err)
+		return false
+	}
+	return true
 }

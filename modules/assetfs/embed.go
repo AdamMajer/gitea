@@ -6,6 +6,7 @@ package assetfs
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -15,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/util"
 )
 
 type EmbeddedFile interface {
@@ -102,11 +103,11 @@ func NewEmbeddedFS(data []byte) fs.ReadDirFS {
 	efs := &embeddedFS{data: data, files: make(map[string]*embeddedFileInfo)}
 	efs.meta = sync.OnceValue(func() *EmbeddedMeta {
 		var meta EmbeddedMeta
-		p := bytes.LastIndexByte(data, '\n')
-		if p < 0 {
+		_, metaJSON, ok := bytes.CutLast(data, []byte{'\n'})
+		if !ok {
 			return &meta
 		}
-		if err := json.Unmarshal(data[p+1:], &meta); err != nil {
+		if err := json.Unmarshal(metaJSON, &meta); err != nil {
 			panic("embedded file is not valid")
 		}
 		return &meta
@@ -260,7 +261,7 @@ func (fi *embeddedFileInfo) Mode() fs.FileMode {
 }
 
 func (fi *embeddedFileInfo) ModTime() time.Time {
-	return getExecutableModTime()
+	return GetExecutableModTime()
 }
 
 func (fi *embeddedFileInfo) IsDir() bool {
@@ -279,9 +280,9 @@ func (fi *embeddedFileInfo) Info() (fs.FileInfo, error) {
 	return fi, nil
 }
 
-// getExecutableModTime returns the modification time of the executable file.
+// GetExecutableModTime returns the modification time of the executable file.
 // In bindata, we can't use the ModTime of the files because we need to make the build reproducible
-var getExecutableModTime = sync.OnceValue(func() (modTime time.Time) {
+var GetExecutableModTime = sync.OnceValue(func() (modTime time.Time) {
 	exePath, err := os.Executable()
 	if err != nil {
 		return modTime
@@ -301,12 +302,12 @@ var getExecutableModTime = sync.OnceValue(func() (modTime time.Time) {
 	return st.ModTime()
 })
 
-func GenerateEmbedBindata(fsRootPath, outputFile string) error {
+func GenerateEmbedBindata(fsRootPath, outputFile string) (err error) {
 	output, err := os.OpenFile(outputFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.ModePerm)
 	if err != nil {
 		return err
 	}
-	defer output.Close()
+	defer func() { err = errors.Join(err, output.Close()) }()
 
 	meta := &EmbeddedMeta{}
 	meta.Root = &embeddedFileInfo{}

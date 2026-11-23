@@ -12,9 +12,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/validation"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/validation"
 
 	"github.com/hashicorp/go-version"
 )
@@ -42,7 +43,9 @@ const (
 	PropertySymbolID = "nuget.symbol.id"
 )
 
-var idmatch = regexp.MustCompile(`\A\w+(?:[.-]\w+)*\z`)
+var idmatch = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`\A\w+(?:[.-]\w+)*\z`)
+})
 
 const maxNuspecFileSize = 3 * 1024 * 1024
 
@@ -140,7 +143,7 @@ type nuspecPackage struct {
 func ParsePackageMetaData(r io.ReaderAt, size int64) (*Package, error) {
 	archive, err := zip.NewReader(r, size)
 	if err != nil {
-		return nil, err
+		return nil, util.NewInvalidArgumentErrorf("unable to parse package meta: %v", err)
 	}
 
 	for _, file := range archive.File {
@@ -151,7 +154,7 @@ func ParsePackageMetaData(r io.ReaderAt, size int64) (*Package, error) {
 			if file.UncompressedSize64 > maxNuspecFileSize {
 				return nil, ErrNuspecFileTooLarge
 			}
-			f, err := archive.Open(file.Name)
+			f, err := file.Open()
 			if err != nil {
 				return nil, err
 			}
@@ -171,7 +174,7 @@ func ParseNuspecMetaData(archive *zip.Reader, r io.Reader) (*Package, error) {
 		return nil, err
 	}
 
-	if !idmatch.MatchString(p.Metadata.ID) {
+	if !idmatch().MatchString(p.Metadata.ID) {
 		return nil, ErrNuspecInvalidID
 	}
 

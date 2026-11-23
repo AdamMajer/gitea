@@ -8,32 +8,36 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"code.gitea.io/gitea/models/auth"
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/auth/password"
-	"code.gitea.io/gitea/modules/eventsource"
-	"code.gitea.io/gitea/modules/httplib"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/session"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/modules/web/middleware"
-	auth_service "code.gitea.io/gitea/services/auth"
-	"code.gitea.io/gitea/services/auth/source/oauth2"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/externalaccount"
-	"code.gitea.io/gitea/services/forms"
-	"code.gitea.io/gitea/services/mailer"
-	user_service "code.gitea.io/gitea/services/user"
+	audit_model "gitea.dev/models/audit"
+	"gitea.dev/models/auth"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/auth/password"
+	"gitea.dev/modules/httplib"
+	"gitea.dev/modules/imagecaptcha"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/session"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	"gitea.dev/modules/web/middleware"
+	"gitea.dev/services/audit"
+	auth_service "gitea.dev/services/auth"
+	"gitea.dev/services/auth/source/oauth2"
+	"gitea.dev/services/context"
+	"gitea.dev/services/externalaccount"
+	"gitea.dev/services/forms"
+	"gitea.dev/services/mailer"
+	user_service "gitea.dev/services/user"
+	websocket_service "gitea.dev/services/websocket"
 
 	"github.com/markbates/goth"
 )
@@ -45,62 +49,90 @@ const (
 	TplActivatePrompt templates.TplName = "user/auth/activate_prompt" // for showing a message for user activation
 )
 
+type CommonAuthOptions struct {
+	EnableCaptcha bool
+}
+
+func prepareCommonAuthPageData(ctx *context.Context, opt CommonAuthOptions) {
+	ctx.Data["EnablePasswordSignInForm"] = setting.Service.EnablePasswordSignInForm
+	ctx.Data["EnablePasskeyAuth"] = setting.Service.EnablePasskeyAuth
+	ctx.Data["AllowOnlyInternalRegistration"] = setting.Service.AllowOnlyInternalRegistration
+
+	if opt.EnableCaptcha {
+		ctx.Data["EnableCaptcha"] = true
+		ctx.Data["RecaptchaAPIScriptURL"] = strings.TrimSuffix(setting.Service.RecaptchaURL, "/") + "/api.js"
+		ctx.Data["CaptchaType"] = setting.Service.CaptchaType
+		ctx.Data["RecaptchaSitekey"] = setting.Service.RecaptchaSitekey
+		ctx.Data["HcaptchaSitekey"] = setting.Service.HcaptchaSitekey
+		ctx.Data["McaptchaSitekey"] = setting.Service.McaptchaSitekey
+		ctx.Data["McaptchaURL"] = strings.TrimSuffix(setting.Service.McaptchaURL, "/")
+		ctx.Data["CfTurnstileSitekey"] = setting.Service.CfTurnstileSitekey
+		if setting.Service.CaptchaType == setting.ImageCaptcha {
+			ctx.Data["CreateImageCaptcha"] = imagecaptcha.CreateNew
+		}
+	}
+}
+
 // autoSignIn reads cookie and try to auto-login.
 func autoSignIn(ctx *context.Context) (bool, error) {
-	isSucceed := false
-	defer func() {
-		if !isSucceed {
-			ctx.DeleteSiteCookie(setting.CookieRememberName)
-		}
-	}()
+	cookieTokenValue := ctx.GetSiteCookie(setting.CookieRememberName)
+	if cookieTokenValue == "" {
+		return false, nil
+	}
 
 	if err := auth.DeleteExpiredAuthTokens(ctx); err != nil {
 		log.Error("Failed to delete expired auth tokens: %v", err)
 	}
 
-	t, err := auth_service.CheckAuthToken(ctx, ctx.GetSiteCookie(setting.CookieRememberName))
-	if err != nil {
-		switch err {
-		case auth_service.ErrAuthTokenInvalidFormat, auth_service.ErrAuthTokenExpired:
-			return false, nil
+	deleteCookie := true
+	defer func() {
+		if deleteCookie {
+			ctx.DeleteSiteCookie(setting.CookieRememberName)
 		}
-		return false, err
-	}
-	if t == nil {
+	}()
+
+	t, err := auth_service.CheckAuthToken(ctx, cookieTokenValue)
+	if errors.Is(err, auth_service.ErrAuthTokenStale) {
+		deleteCookie = false
 		return false, nil
+	} else if errors.Is(err, auth_service.ErrAuthTokenInvalidFormat) || errors.Is(err, auth_service.ErrAuthTokenExpired) {
+		return false, nil
+	} else if err != nil {
+		return false, err
 	}
 
 	u, err := user_model.GetUserByID(ctx, t.UserID)
-	if err != nil {
-		if !user_model.IsErrUserNotExist(err) {
-			return false, fmt.Errorf("GetUserByID: %w", err)
-		}
+	if user_model.IsErrUserNotExist(err) {
 		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("GetUserByID: %w", err)
 	}
+
 	userHasTwoFactorAuth, err := auth.HasTwoFactorOrWebAuthn(ctx, u.ID)
 	if err != nil {
 		return false, fmt.Errorf("HasTwoFactorOrWebAuthn: %w", err)
 	}
 
-	isSucceed = true
-
 	nt, token, err := auth_service.RegenerateAuthToken(ctx, t)
-	if err != nil {
+	if errors.Is(err, auth_service.ErrAuthTokenStale) {
+		deleteCookie = false
+		return false, nil
+	} else if err != nil {
 		return false, err
 	}
 
 	ctx.SetSiteCookie(setting.CookieRememberName, nt.ID+":"+token, setting.LogInRememberDays*timeutil.Day)
+	deleteCookie = false
 
-	if err := updateSession(ctx, nil, map[string]any{
+	if err := regenerateSession(ctx, map[string]any{
 		session.KeyUID:                  u.ID,
-		session.KeyUname:                u.Name,
 		session.KeyUserHasTwoFactorAuth: userHasTwoFactorAuth,
 	}); err != nil {
 		return false, fmt.Errorf("unable to updateSession: %w", err)
 	}
 
 	if err := resetLocale(ctx, u); err != nil {
-		return false, err
+		log.Error("Failed to reset locale for user %d: %v", u.ID, err)
 	}
 
 	return true, nil
@@ -162,6 +194,11 @@ func consumeAuthRedirectLink(ctx *context.Context) string {
 }
 
 func redirectAfterAuth(ctx *context.Context) {
+	if setting.Config().Instance.MaintenanceMode.Value(ctx).IsActive() {
+		// in maintenance mode, redirect to admin dashboard, it is the only accessible page
+		ctx.Redirect(setting.AppSubURL + "/-/admin")
+		return
+	}
 	ctx.RedirectToCurrentSite(consumeAuthRedirectLink(ctx))
 }
 
@@ -174,7 +211,7 @@ func performAutoLogin(ctx *context.Context) bool {
 			ctx.Flash.Error(ctx.Tr("auth.remember_me.compromised"), true)
 			return false
 		}
-		ctx.ServerError("autoSignIn", err)
+		ctx.ServerErrorAuto(err)
 		return true
 	}
 
@@ -186,20 +223,49 @@ func performAutoLogin(ctx *context.Context) bool {
 	return false
 }
 
-func prepareSignInPageData(ctx *context.Context) {
+func performAutoLoginOAuth2(ctx *context.Context, data *preparedSignInData) bool {
+	// If only 1 OAuth provider is present and other login methods are disabled, redirect to the OAuth provider.
+	onlySingleOAuth2 := len(data.oauth2Providers) == 1 &&
+		!setting.Service.EnablePasswordSignInForm &&
+		!setting.Service.EnablePasskeyAuth &&
+		!data.enableSSPI
+
+	if !onlySingleOAuth2 {
+		return false
+	}
+
+	skipToOAuthURL := setting.AppSubURL + "/user/oauth2/" + url.PathEscape(data.oauth2Providers[0].DisplayName())
+	if redirectTo := ctx.FormString("redirect_to"); redirectTo != "" {
+		skipToOAuthURL += "?redirect_to=" + url.QueryEscape(redirectTo)
+	}
+	ctx.Redirect(skipToOAuthURL)
+	return true
+}
+
+type preparedSignInData struct {
+	oauth2Providers []oauth2.Provider
+	enableSSPI      bool
+}
+
+func prepareSignInPageData(ctx *context.Context) (ret preparedSignInData) {
+	var err error
+	ret.enableSSPI = auth.IsSSPIEnabled(ctx)
+	ret.oauth2Providers, err = oauth2.GetOAuth2Providers(ctx, optional.Some(true))
+	if err != nil {
+		log.Error("Failed to get OAuth2 providers: %v", err)
+	}
 	ctx.Data["Title"] = ctx.Tr("sign_in")
-	ctx.Data["OAuth2Providers"], _ = oauth2.GetOAuth2Providers(ctx, optional.Some(true))
+	ctx.Data["OAuth2Providers"] = ret.oauth2Providers
 	ctx.Data["Title"] = ctx.Tr("sign_in")
 	ctx.Data["SignInLink"] = setting.AppSubURL + "/user/login"
 	ctx.Data["PageIsSignIn"] = true
 	ctx.Data["PageIsLogin"] = true
-	ctx.Data["EnableSSPI"] = auth.IsSSPIEnabled(ctx)
-	ctx.Data["EnablePasswordSignInForm"] = setting.Service.EnablePasswordSignInForm
-	ctx.Data["EnablePasskeyAuth"] = setting.Service.EnablePasskeyAuth
+	ctx.Data["EnableSSPI"] = ret.enableSSPI
 
-	if setting.Service.EnableCaptcha && setting.Service.RequireCaptchaForLogin {
-		context.SetCaptchaData(ctx)
-	}
+	prepareCommonAuthPageData(ctx, CommonAuthOptions{
+		EnableCaptcha: setting.Service.EnableCaptcha && setting.Service.RequireCaptchaForLogin,
+	})
+	return ret
 }
 
 // SignIn render sign in page
@@ -211,7 +277,10 @@ func SignIn(ctx *context.Context) {
 		redirectAfterAuth(ctx)
 		return
 	}
-	prepareSignInPageData(ctx)
+	data := prepareSignInPageData(ctx)
+	if performAutoLoginOAuth2(ctx, &data) {
+		return
+	}
 	ctx.HTML(http.StatusOK, tplSignIn)
 }
 
@@ -228,11 +297,10 @@ func SignInPost(ctx *context.Context) {
 		return
 	}
 
-	form := web.GetForm(ctx).(*forms.SignInForm)
+	form := web.GetForm[*forms.SignInForm](ctx)
 
 	if setting.Service.EnableCaptcha && setting.Service.RequireCaptchaForLogin {
-		context.VerifyCaptcha(ctx, tplSignIn, form)
-		if ctx.Written() {
+		if !context.VerifyCaptcha(ctx, tplSignIn, form) {
 			return
 		}
 	}
@@ -240,26 +308,17 @@ func SignInPost(ctx *context.Context) {
 	u, source, err := auth_service.UserSignIn(ctx, form.UserName, form.Password)
 	if err != nil {
 		if errors.Is(err, util.ErrNotExist) || errors.Is(err, util.ErrInvalidArgument) {
-			ctx.RenderWithErr(ctx.Tr("form.username_password_incorrect"), tplSignIn, &form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.username_password_incorrect"), tplSignIn, &form)
 			log.Warn("Failed authentication attempt for %s from %s: %v", form.UserName, ctx.RemoteAddr(), err)
 		} else if user_model.IsErrEmailAlreadyUsed(err) {
-			ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplSignIn, &form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.email_been_used"), tplSignIn, &form)
 			log.Warn("Failed authentication attempt for %s from %s: %v", form.UserName, ctx.RemoteAddr(), err)
 		} else if user_model.IsErrUserProhibitLogin(err) {
 			log.Warn("Failed authentication attempt for %s from %s: %v", form.UserName, ctx.RemoteAddr(), err)
 			ctx.Data["Title"] = ctx.Tr("auth.prohibit_login")
 			ctx.HTML(http.StatusOK, "user/auth/prohibit_login")
-		} else if user_model.IsErrUserInactive(err) {
-			if setting.Service.RegisterEmailConfirm {
-				ctx.Data["Title"] = ctx.Tr("auth.active_your_account")
-				ctx.HTML(http.StatusOK, TplActivate)
-			} else {
-				log.Warn("Failed authentication attempt for %s from %s: %v", form.UserName, ctx.RemoteAddr(), err)
-				ctx.Data["Title"] = ctx.Tr("auth.prohibit_login")
-				ctx.HTML(http.StatusOK, "user/auth/prohibit_login")
-			}
 		} else {
-			ctx.ServerError("UserSignIn", err)
+			ctx.ServerErrorAuto(err)
 		}
 		return
 	}
@@ -273,46 +332,35 @@ func SignInPost(ctx *context.Context) {
 
 	// If this user is enrolled in 2FA TOTP, we can't sign the user in just yet.
 	// Instead, redirect them to the 2FA authentication page.
-	hasTOTPtwofa, err := auth.HasTwoFactorByUID(ctx, u.ID)
+	hasTwoFactor, err := auth.HasTwoFactorOrWebAuthn(ctx, u.ID)
 	if err != nil {
-		ctx.ServerError("UserSignIn", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
-
-	// Check if the user has webauthn registration
-	hasWebAuthnTwofa, err := auth.HasWebAuthnRegistrationsByUID(ctx, u.ID)
-	if err != nil {
-		ctx.ServerError("UserSignIn", err)
-		return
-	}
-
-	if !hasTOTPtwofa && !hasWebAuthnTwofa {
-		// No two-factor auth configured we can sign in the user
+	if !hasTwoFactor {
 		handleSignIn(ctx, u, form.Remember)
 		return
 	}
 
-	updates := map[string]any{
-		// User will need to use 2FA TOTP or WebAuthn, save data
-		"twofaUid":      u.ID,
-		"twofaRemember": form.Remember,
-	}
-	if hasTOTPtwofa {
-		// User will need to use WebAuthn, save data
-		updates["totpEnrolled"] = u.ID
-	}
-	if err := updateSession(ctx, nil, updates); err != nil {
-		ctx.ServerError("UserSignIn: Unable to update session", err)
+	handleTwoFactorRequired(ctx, u, form.Remember, nil)
+}
+
+func handleTwoFactorRequired(ctx *context.Context, u *user_model.User, remember bool, extra map[string]any) {
+	updates := map[string]any{"twofaUid": u.ID, "twofaRemember": remember}
+	maps.Copy(updates, extra)
+	if err := regenerateSession(ctx, updates); err != nil {
+		ctx.ServerErrorAuto(err)
 		return
 	}
-
-	// If we have WebAuthn redirect there first
-	if hasWebAuthnTwofa {
+	hasWebAuthn, err := auth.HasWebAuthnRegistrationsByUID(ctx, u.ID)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return
+	}
+	if hasWebAuthn {
 		ctx.Redirect(setting.AppSubURL + "/user/webauthn")
 		return
 	}
-
-	// Fallback to 2FA
 	ctx.Redirect(setting.AppSubURL + "/user/two_factor")
 }
 
@@ -327,9 +375,12 @@ func handleSignIn(ctx *context.Context, u *user_model.User, remember bool) {
 
 func handleSignInFull(ctx *context.Context, u *user_model.User, remember bool) {
 	if remember {
+		if err := auth.DeleteExpiredAuthTokens(ctx); err != nil {
+			log.Error("Failed to delete expired auth tokens: %v", err)
+		}
 		nt, token, err := auth_service.CreateAuthTokenForUserID(ctx, u.ID)
 		if err != nil {
-			ctx.ServerError("CreateAuthTokenForUserID", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
@@ -338,26 +389,16 @@ func handleSignInFull(ctx *context.Context, u *user_model.User, remember bool) {
 
 	userHasTwoFactorAuth, err := auth.HasTwoFactorOrWebAuthn(ctx, u.ID)
 	if err != nil {
-		ctx.ServerError("HasTwoFactorOrWebAuthn", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
-	if err := updateSession(ctx, []string{
-		// Delete the openid, 2fa and link_account data
-		"openid_verified_uri",
-		"openid_signin_remember",
-		"openid_determined_email",
-		"openid_determined_username",
-		"twofaUid",
-		"twofaRemember",
-		"linkAccount",
-		"linkAccountData",
-	}, map[string]any{
+	auth_service.ClearSessionKeysForSignIn(ctx.Session)
+	if err := regenerateSession(ctx, map[string]any{
 		session.KeyUID:                  u.ID,
-		session.KeyUname:                u.Name,
 		session.KeyUserHasTwoFactorAuth: userHasTwoFactorAuth,
 	}); err != nil {
-		ctx.ServerError("RegenerateSession", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -368,7 +409,7 @@ func handleSignInFull(ctx *context.Context, u *user_model.User, remember bool) {
 			Language: optional.Some(ctx.Locale.Language()),
 		}
 		if err := user_service.UpdateUser(ctx, u, opts); err != nil {
-			ctx.ServerError("UpdateUser Language", fmt.Errorf("Error updating user language [user: %d, locale: %s]", u.ID, ctx.Locale.Language()))
+			ctx.ServerErrorAuto(fmt.Errorf("Error updating user language [user: %d, locale: %s]", u.ID, ctx.Locale.Language()))
 			return
 		}
 	}
@@ -381,7 +422,7 @@ func handleSignInFull(ctx *context.Context, u *user_model.User, remember bool) {
 
 	// Register last login
 	if err := user_service.UpdateUser(ctx, u, &user_service.UpdateOptions{SetLastLogin: true}); err != nil {
-		ctx.ServerError("UpdateUser", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 }
@@ -404,10 +445,20 @@ func extractUserNameFromOAuth2(gothUser *goth.User) (string, error) {
 	}
 }
 
+func oauth2IdentityMatchesUser(gothUser *goth.User, u *user_model.User) bool {
+	if gothUser.Email != "" && strings.EqualFold(gothUser.Email, u.Email) {
+		return true
+	}
+	uname, err := extractUserNameFromOAuth2(gothUser)
+	return err == nil && uname != "" && strings.EqualFold(uname, u.Name)
+}
+
 // HandleSignOut resets the session and sets the cookies
 func HandleSignOut(ctx *context.Context) {
 	_ = ctx.Session.Flush()
-	_ = ctx.Session.Destroy(ctx.Resp, ctx.Req)
+	if err := ctx.Session.Destroy(ctx.Resp, ctx.Req); err != nil {
+		log.Error("Unable to destroy session: %v", err)
+	}
 	ctx.DeleteSiteCookie(setting.CookieRememberName)
 	middleware.DeleteRedirectToCookie(ctx.Resp)
 }
@@ -415,59 +466,95 @@ func HandleSignOut(ctx *context.Context) {
 // SignOut sign out from login status
 func SignOut(ctx *context.Context) {
 	if ctx.Doer != nil {
-		eventsource.GetManager().SendMessageBlocking(ctx.Doer.ID, &eventsource.Event{
-			Name: "logout",
-			Data: ctx.Session.ID(),
-		})
+		websocket_service.PublishLogout(ctx.Doer.ID, ctx.Session.ID())
 	}
+
+	impersonator := audit.ImpersonatorFromContext(ctx)
+
+	exitedImpersonated, err := auth_service.ExitImpersonatedUser(ctx.Session)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return
+	}
+	if exitedImpersonated {
+		audit.RecordAs(ctx, impersonator, audit_model.UserImpersonationExit, ctx.Doer)
+		ctx.Redirect(setting.AppSubURL + "/-/admin")
+		return
+	}
+
+	// prepare the sign-out URL before destroying the session
+	redirectTo := buildSignOutRedirectURL(ctx)
 	HandleSignOut(ctx)
-	ctx.JSONRedirect(setting.AppSubURL + "/")
+	ctx.Redirect(redirectTo)
 }
 
-// SignUp render the register page
-func SignUp(ctx *context.Context) {
+func buildSignOutRedirectURL(ctx *context.Context) string {
+	if ctx.Doer != nil && shouldRedirectToOIDCEndSession(ctx) {
+		if s := buildOIDCEndSessionURL(ctx, ctx.Doer); s != "" {
+			return s
+		}
+	}
+
+	// The assumption is: if reverse proxy auth is enabled, then the users should only sign-in via reverse proxy auth.
+	if setting.Service.EnableReverseProxyAuth && setting.ReverseProxyLogoutRedirect != "" {
+		return setting.ReverseProxyLogoutRedirect
+	}
+	return setting.AppSubURL + "/"
+}
+
+// shouldRedirectToOIDCEndSession reports whether this session should end at the
+// OIDC provider. Prefer the session sign-in method so an OAuth2-linked account
+// that signed in with a password does not hit end_session_endpoint.
+func shouldRedirectToOIDCEndSession(ctx *context.Context) bool {
+	return ctx.Session.Get(session.KeySignInMethod) == session.SignInMethodOAuth2
+}
+
+func prepareSignUpPageData(ctx *context.Context) bool {
 	ctx.Data["Title"] = ctx.Tr("sign_up")
 	ctx.Data["SignUpLink"] = setting.AppSubURL + "/user/sign_up"
+	ctx.Data["PageIsSignUp"] = true
+	ctx.Data["EnableSSPI"] = auth.IsSSPIEnabled(ctx)
 
-	hasUsers, _ := user_model.HasUsers(ctx)
+	hasUsers, err := user_model.HasUsers(ctx)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return false
+	}
 	ctx.Data["IsFirstTimeRegistration"] = !hasUsers.HasAnyUser
 
 	oauth2Providers, err := oauth2.GetOAuth2Providers(ctx, optional.Some(true))
 	if err != nil {
-		ctx.ServerError("UserSignUp", err)
-		return
+		ctx.ServerErrorAuto(err)
+		return false
 	}
-
 	ctx.Data["OAuth2Providers"] = oauth2Providers
-	context.SetCaptchaData(ctx)
 
-	ctx.Data["PageIsSignUp"] = true
+	prepareCommonAuthPageData(ctx, CommonAuthOptions{
+		EnableCaptcha: setting.Service.EnableCaptcha,
+	})
 
 	// Show Disabled Registration message if DisableRegistration or AllowOnlyExternalRegistration options are true
 	ctx.Data["DisableRegistration"] = setting.Service.DisableRegistration || setting.Service.AllowOnlyExternalRegistration
 
-	rememberAuthRedirectLink(ctx)
+	return true
+}
 
+// SignUp render the register page
+func SignUp(ctx *context.Context) {
+	if !prepareSignUpPageData(ctx) {
+		return
+	}
+	rememberAuthRedirectLink(ctx)
 	ctx.HTML(http.StatusOK, tplSignUp)
 }
 
 // SignUpPost response for sign up information submission
 func SignUpPost(ctx *context.Context) {
-	form := web.GetForm(ctx).(*forms.RegisterForm)
-	ctx.Data["Title"] = ctx.Tr("sign_up")
-
-	ctx.Data["SignUpLink"] = setting.AppSubURL + "/user/sign_up"
-
-	oauth2Providers, err := oauth2.GetOAuth2Providers(ctx, optional.Some(true))
-	if err != nil {
-		ctx.ServerError("UserSignUp", err)
+	if !prepareSignUpPageData(ctx) {
 		return
 	}
 
-	ctx.Data["OAuth2Providers"] = oauth2Providers
-	context.SetCaptchaData(ctx)
-
-	ctx.Data["PageIsSignUp"] = true
+	form := web.GetForm[*forms.RegisterForm](ctx)
 
 	// Permission denied if DisableRegistration or AllowOnlyExternalRegistration options are true
 	if setting.Service.DisableRegistration || setting.Service.AllowOnlyExternalRegistration {
@@ -480,29 +567,28 @@ func SignUpPost(ctx *context.Context) {
 		return
 	}
 
-	context.VerifyCaptcha(ctx, tplSignUp, form)
-	if ctx.Written() {
+	if !context.VerifyCaptcha(ctx, tplSignUp, form) {
 		return
 	}
 
 	if !form.IsEmailDomainAllowed() {
-		ctx.RenderWithErr(ctx.Tr("auth.email_domain_blacklisted"), tplSignUp, &form)
+		ctx.RenderWithErrDeprecated(ctx.Tr("auth.email_domain_blacklisted"), tplSignUp, &form)
 		return
 	}
 
 	if form.Password != form.Retype {
 		ctx.Data["Err_Password"] = true
-		ctx.RenderWithErr(ctx.Tr("form.password_not_match"), tplSignUp, &form)
+		ctx.RenderWithErrDeprecated(ctx.Tr("form.password_not_match"), tplSignUp, &form)
 		return
 	}
 	if len(form.Password) < setting.MinPasswordLength {
 		ctx.Data["Err_Password"] = true
-		ctx.RenderWithErr(ctx.Tr("auth.password_too_short", setting.MinPasswordLength), tplSignUp, &form)
+		ctx.RenderWithErrDeprecated(ctx.Tr("auth.password_too_short", setting.MinPasswordLength), tplSignUp, &form)
 		return
 	}
 	if !password.IsComplexEnough(form.Password) {
 		ctx.Data["Err_Password"] = true
-		ctx.RenderWithErr(password.BuildComplexityError(ctx.Locale), tplSignUp, &form)
+		ctx.RenderWithErrDeprecated(password.BuildComplexityError(ctx.Locale), tplSignUp, &form)
 		return
 	}
 	if err := password.IsPwned(ctx, form.Password); err != nil {
@@ -512,7 +598,7 @@ func SignUpPost(ctx *context.Context) {
 			errMsg = ctx.Tr("auth.password_pwned_err")
 		}
 		ctx.Data["Err_Password"] = true
-		ctx.RenderWithErr(errMsg, tplSignUp, &form)
+		ctx.RenderWithErrDeprecated(errMsg, tplSignUp, &form)
 		return
 	}
 
@@ -551,18 +637,21 @@ func createUserInContext(ctx *context.Context, tpl templates.TplName, form any, 
 		if possibleLinkAccountData != nil && (user_model.IsErrUserAlreadyExist(err) || user_model.IsErrEmailAlreadyUsed(err)) {
 			switch setting.OAuth2Client.AccountLinking {
 			case setting.OAuth2AccountLinkingAuto:
-				var user *user_model.User
-				user = &user_model.User{Name: u.Name}
-				hasUser, err := user_model.GetUser(ctx, user)
-				if !hasUser || err != nil {
-					user = &user_model.User{Email: u.Email}
-					hasUser, err = user_model.GetUser(ctx, user)
-					if !hasUser || err != nil {
-						ctx.ServerError("UserLinkAccount", err)
+				user, err := user_model.GetIndividualUserByName(ctx, u.Name)
+				if err != nil {
+					if !user_model.IsErrUserNotExist(err) {
+						ctx.ServerErrorAuto(err)
+						return false
+					}
+					user, err = user_model.GetIndividualUserByPrimaryEmail(ctx, u.Email)
+					if err != nil {
+						ctx.ServerErrorAuto(err)
 						return false
 					}
 				}
-
+				if !oauth2IdentityMatchesUser(&possibleLinkAccountData.GothUser, user) {
+					break // name or email came from the sign-up form, report the conflict instead of linking
+				}
 				// TODO: probably we should respect 'remember' user's choice...
 				oauth2LinkAccount(ctx, user, possibleLinkAccountData, true)
 				return false // user is already created here, all redirects are handled
@@ -574,38 +663,40 @@ func createUserInContext(ctx *context.Context, tpl templates.TplName, form any, 
 
 		// handle error without a template
 		if len(tpl) == 0 {
-			ctx.ServerError("CreateUser", err)
+			ctx.ServerErrorAuto(err)
 			return false
 		}
 
 		// handle error with template
+		var errNameReserved db.ErrNameReserved
+		var errNamePatternNotAllowed db.ErrNamePatternNotAllowed
+		var errNameCharsNotAllowed db.ErrNameCharsNotAllowed
+		var errEmailInvalid user_model.ErrEmailInvalid
 		switch {
 		case user_model.IsErrUserAlreadyExist(err):
 			ctx.Data["Err_UserName"] = true
-			ctx.RenderWithErr(ctx.Tr("form.username_been_taken"), tpl, form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.username_been_taken"), tpl, form)
 		case user_model.IsErrEmailAlreadyUsed(err):
 			ctx.Data["Err_Email"] = true
-			ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tpl, form)
-		case user_model.IsErrEmailCharIsNotSupported(err):
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.email_been_used"), tpl, form)
+		case errors.As(err, &errEmailInvalid):
 			ctx.Data["Err_Email"] = true
-			ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tpl, form)
-		case user_model.IsErrEmailInvalid(err):
-			ctx.Data["Err_Email"] = true
-			ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tpl, form)
-		case db.IsErrNameReserved(err):
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.email_invalid"), tpl, form)
+		case errors.As(err, &errNameReserved):
 			ctx.Data["Err_UserName"] = true
-			ctx.RenderWithErr(ctx.Tr("user.form.name_reserved", err.(db.ErrNameReserved).Name), tpl, form)
-		case db.IsErrNamePatternNotAllowed(err):
+			ctx.RenderWithErrDeprecated(ctx.Tr("user.form.name_reserved", errNameReserved.Name), tpl, form)
+		case errors.As(err, &errNamePatternNotAllowed):
 			ctx.Data["Err_UserName"] = true
-			ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(db.ErrNamePatternNotAllowed).Pattern), tpl, form)
-		case db.IsErrNameCharsNotAllowed(err):
+			ctx.RenderWithErrDeprecated(ctx.Tr("user.form.name_pattern_not_allowed", errNamePatternNotAllowed.Pattern), tpl, form)
+		case errors.As(err, &errNameCharsNotAllowed):
 			ctx.Data["Err_UserName"] = true
-			ctx.RenderWithErr(ctx.Tr("user.form.name_chars_not_allowed", err.(db.ErrNameCharsNotAllowed).Name), tpl, form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("user.form.name_chars_not_allowed", errNameCharsNotAllowed.Name), tpl, form)
 		default:
-			ctx.ServerError("CreateUser", err)
+			ctx.ServerErrorAuto(err)
 		}
 		return false
 	}
+	audit.RecordAs(ctx, u, audit_model.UserCreate, u)
 	log.Trace("Account created: %s", u.Name)
 	return true
 }
@@ -617,7 +708,7 @@ func handleUserCreated(ctx *context.Context, u *user_model.User, possibleLinkAcc
 	// Auto-set admin for the only user.
 	hasUsers, err := user_model.HasUsers(ctx)
 	if err != nil {
-		ctx.ServerError("HasUsers", err)
+		ctx.ServerErrorAuto(err)
 		return false
 	}
 	if hasUsers.HasOnlyOneUser {
@@ -628,7 +719,7 @@ func handleUserCreated(ctx *context.Context, u *user_model.User, possibleLinkAcc
 			SetLastLogin: true,
 		}
 		if err := user_service.UpdateUser(ctx, u, opts); err != nil {
-			ctx.ServerError("UpdateUser", err)
+			ctx.ServerErrorAuto(err)
 			return false
 		}
 	}
@@ -750,6 +841,7 @@ func ActivatePost(ctx *context.Context) {
 				return
 			}
 			ctx.Doer.Email = newEmail
+			audit.Record(ctx, audit_model.UserEmailPrimaryChange, ctx.Doer, "email", newEmail)
 		}
 		// FIXME: at the moment, GET request handles the "send confirmation email" action. But the old code does this redirect and then send a confirmation email.
 		ctx.Redirect(setting.AppSubURL + "/user/activate")
@@ -784,42 +876,36 @@ func handleAccountActivation(ctx *context.Context, user *user_model.User) {
 	user.IsActive = true
 	var err error
 	if user.Rands, err = user_model.GetUserSalt(); err != nil {
-		ctx.ServerError("UpdateUser", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if err := user_model.UpdateUserCols(ctx, user, "is_active", "rands"); err != nil {
-		if user_model.IsErrUserNotExist(err) {
-			ctx.NotFound(err)
-		} else {
-			ctx.ServerError("UpdateUser", err)
-		}
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := user_model.ActivateUserEmail(ctx, user.ID, user.Email, true); err != nil {
 		log.Error("Unable to activate email for user: %-v with email: %s: %v", user, user.Email, err)
-		ctx.ServerError("ActivateUserEmail", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
+	audit.RecordAs(ctx, user, audit_model.UserActive, user, "active", true)
 	log.Trace("User activated: %s", user.Name)
 
-	if err := updateSession(ctx, nil, map[string]any{
-		"uid":   user.ID,
-		"uname": user.Name,
-	}); err != nil {
+	if err := regenerateSession(ctx, map[string]any{session.KeyUID: user.ID}); err != nil {
 		log.Error("Unable to regenerate session for user: %-v with email: %s: %v", user, user.Email, err)
-		ctx.ServerError("ActivateUserEmail", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := resetLocale(ctx, user); err != nil {
-		ctx.ServerError("resetLocale", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := user_service.UpdateUser(ctx, user, &user_service.UpdateOptions{SetLastLogin: true}); err != nil {
-		ctx.ServerError("UpdateUser", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -835,7 +921,7 @@ func ActivateEmail(ctx *context.Context) {
 	// Verify code.
 	if email := user_model.VerifyActiveEmailCode(ctx, code, emailStr); email != nil {
 		if err := user_model.ActivateEmail(ctx, email); err != nil {
-			ctx.ServerError("ActivateEmail", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
@@ -845,6 +931,7 @@ func ActivateEmail(ctx *context.Context) {
 		if u, err := user_model.GetUserByID(ctx, email.UID); err != nil {
 			log.Warn("GetUserByID: %d", email.UID)
 		} else {
+			audit.RecordAs(ctx, u, audit_model.UserEmailActivate, u, "email", email.Email, "activated", true)
 			// Allow user to validate more emails
 			_ = ctx.Cache.Delete("MailResendLimit_" + u.LowerName)
 		}
@@ -856,17 +943,10 @@ func ActivateEmail(ctx *context.Context) {
 	ctx.Redirect(setting.AppSubURL + "/user/settings/account")
 }
 
-func updateSession(ctx *context.Context, deletes []string, updates map[string]any) error {
-	if _, err := session.RegenerateSession(ctx.Resp, ctx.Req); err != nil {
-		return fmt.Errorf("regenerate session: %w", err)
-	}
+func regenerateSession(ctx *context.Context, updates map[string]any) error {
 	sess := ctx.Session
+	sess.Regenerate(ctx.Resp, ctx.Req)
 	sessID := sess.ID()
-	for _, k := range deletes {
-		if err := sess.Delete(k); err != nil {
-			return fmt.Errorf("delete %v in session[%s]: %w", k, sessID, err)
-		}
-	}
 	for k, v := range updates {
 		if err := sess.Set(k, v); err != nil {
 			return fmt.Errorf("set %v in session[%s]: %w", k, sessID, err)

@@ -6,15 +6,19 @@ package oauth2
 import (
 	"testing"
 
-	"code.gitea.io/gitea/models/auth"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
+	audit_model "gitea.dev/models/audit"
+	"gitea.dev/models/auth"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/test"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSource(t *testing.T) {
 	assert.NoError(t, unittest.PrepareTestDatabase())
+	defer test.MockVariableValue(&setting.Audit.RecordOutput, setting.AuditRecordOutputDatabase)()
 
 	source := &Source{
 		Provider: "fake",
@@ -57,12 +61,7 @@ func TestSource(t *testing.T) {
 			err := source.refresh(t.Context(), provider, e)
 			assert.NoError(t, err)
 
-			e := &user_model.ExternalLoginUser{
-				ExternalID:    e.ExternalID,
-				LoginSourceID: e.LoginSourceID,
-			}
-
-			ok, err := user_model.GetExternalLogin(t.Context(), e)
+			e, ok, err := user_model.GetExternalLogin(t.Context(), e.LoginSourceID, e.ExternalID)
 			assert.NoError(t, err)
 			assert.True(t, ok)
 			assert.Equal(t, "refresh", e.RefreshToken)
@@ -74,20 +73,17 @@ func TestSource(t *testing.T) {
 		})
 
 		t.Run("expired", func(t *testing.T) {
-			err := source.refresh(t.Context(), provider, &user_model.ExternalLoginUser{
-				ExternalID:    "external",
-				UserID:        user.ID,
-				LoginSourceID: user.LoginSource,
-				RefreshToken:  "expired",
-			})
-			assert.NoError(t, err)
-
-			e := &user_model.ExternalLoginUser{
-				ExternalID:    e.ExternalID,
-				LoginSourceID: e.LoginSourceID,
+			for range 2 {
+				assert.NoError(t, source.refresh(t.Context(), provider, &user_model.ExternalLoginUser{
+					ExternalID:    "external",
+					UserID:        user.ID,
+					LoginSourceID: user.LoginSource,
+					RefreshToken:  "expired",
+				}))
 			}
+			unittest.AssertCount(t, &audit_model.Event{Action: audit_model.UserActive, ScopeID: user.ID, ActorID: user_model.AuthSourceUserID}, 1)
 
-			ok, err := user_model.GetExternalLogin(t.Context(), e)
+			e, ok, err := user_model.GetExternalLogin(t.Context(), e.LoginSourceID, e.ExternalID)
 			assert.NoError(t, err)
 			assert.True(t, ok)
 			assert.Empty(t, e.RefreshToken)

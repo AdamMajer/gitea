@@ -7,9 +7,9 @@ import (
 	"context"
 	"strconv"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/models/packages"
-	debian_module "code.gitea.io/gitea/modules/packages/debian"
+	"gitea.dev/models/db"
+	"gitea.dev/models/packages"
+	debian_module "gitea.dev/modules/packages/debian"
 
 	"xorm.io/builder"
 )
@@ -87,15 +87,7 @@ func SearchPackages(ctx context.Context, opts *PackageSearchOptions) ([]*package
 	if err != nil {
 		return nil, err
 	}
-	pfds := make([]*packages.PackageFileDescriptor, 0, len(pkgFiles))
-	for _, pf := range pkgFiles {
-		pfd, err := packages.GetPackageFileDescriptor(ctx, pf)
-		if err != nil {
-			return nil, err
-		}
-		pfds = append(pfds, pfd)
-	}
-	return pfds, nil
+	return packages.GetPackageFileDescriptors(ctx, pkgFiles)
 }
 
 // GetDistributions gets all available distributions

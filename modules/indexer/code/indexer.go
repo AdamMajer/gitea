@@ -8,21 +8,22 @@ import (
 	"os"
 	"runtime/pprof"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/graceful"
-	"code.gitea.io/gitea/modules/indexer"
-	"code.gitea.io/gitea/modules/indexer/code/bleve"
-	"code.gitea.io/gitea/modules/indexer/code/elasticsearch"
-	"code.gitea.io/gitea/modules/indexer/code/internal"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/process"
-	"code.gitea.io/gitea/modules/queue"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/graceful"
+	"gitea.dev/modules/indexer/code/bleve"
+	"gitea.dev/modules/indexer/code/elasticsearch"
+	"gitea.dev/modules/indexer/code/internal"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/process"
+	"gitea.dev/modules/queue"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
 )
 
 var (
@@ -73,11 +74,17 @@ func index(ctx context.Context, indexer internal.Indexer, repoID int64) error {
 		return nil
 	}
 
+	gitRepo, closer, err := git.RepositoryFromContextOrOpen(ctx, repo)
+	if err != nil {
+		return err
+	}
+	defer closer.Close()
+
 	sha, err := getDefaultBranchSha(ctx, repo)
 	if err != nil {
 		return err
 	}
-	changes, err := getRepoChanges(ctx, repo, sha)
+	changes, err := getRepoChanges(ctx, repo, gitRepo, sha)
 	if err != nil {
 		return err
 	} else if changes == nil {
@@ -92,7 +99,7 @@ func index(ctx context.Context, indexer internal.Indexer, repoID int64) error {
 }
 
 // Init initialize the repo indexer
-func Init() {
+func Init(startup *sync.WaitGroup) {
 	if !setting.Indexer.RepoIndexerEnabled {
 		(*globalIndexer.Load()).Close()
 		return
@@ -139,7 +146,7 @@ func Init() {
 		log.Fatal("Unknown codes indexer type; %s", setting.Indexer.RepoType)
 	}
 
-	go func() {
+	startup.Go(func() {
 		pprof.SetGoroutineLabels(ctx)
 		start := time.Now()
 		var (
@@ -195,7 +202,7 @@ func Init() {
 		go graceful.GetManager().RunWithCancel(indexerQueue)
 
 		if !existed { // populate the index because it's created for the first time
-			go graceful.GetManager().RunWithShutdownContext(populateRepoIndexer)
+			startup.Go(func() { graceful.GetManager().RunWithShutdownContext(populateRepoIndexer) })
 		}
 		select {
 		case waitChannel <- time.Since(start):
@@ -203,7 +210,7 @@ func Init() {
 		}
 
 		close(waitChannel)
-	}()
+	})
 
 	if setting.Indexer.StartupTimeout > 0 {
 		go func() {
@@ -303,12 +310,4 @@ func populateRepoIndexer(ctx context.Context) {
 		}
 	}
 	log.Info("Done (re)populating the repo indexer with existing repositories")
-}
-
-func SupportedSearchModes() []indexer.SearchMode {
-	gi := globalIndexer.Load()
-	if gi == nil {
-		return nil
-	}
-	return (*gi).SupportedSearchModes()
 }

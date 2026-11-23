@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"strings"
 
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/reqctx"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/web/middleware"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/reqctx"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/web/middleware"
+	"gitea.dev/modules/web/routing"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -38,20 +39,22 @@ func isRoutePathExpensive(routePattern string) bool {
 		return false
 	}
 
+	// an endpoint is expensive if crawlers could consume a lot of resources by accessing it
 	expensivePaths := []string{
 		// code related
+		// media and raw endpoints are for single file accesses and useful for rendering README images, not that expensive
+		// the single file endpoints won't be accessed by crawlers as long as the commits/files endpoints are protected from crawlers
 		"/{username}/{reponame}/archive/",
 		"/{username}/{reponame}/blame/",
 		"/{username}/{reponame}/commit/",
 		"/{username}/{reponame}/commits/",
 		"/{username}/{reponame}/compare/",
 		"/{username}/{reponame}/graph",
-		"/{username}/{reponame}/media/",
-		"/{username}/{reponame}/raw/",
 		"/{username}/{reponame}/rss/branch/",
 		"/{username}/{reponame}/src/",
 
 		// issue & PR related (no trailing slash)
+		// because it would cause heavy database queries, and PR pages need to load a lot of git data
 		"/{username}/{reponame}/issues",
 		"/{username}/{reponame}/{type:issues}",
 		"/{username}/{reponame}/pulls",
@@ -71,10 +74,6 @@ func isRoutePathExpensive(routePattern string) bool {
 	return false
 }
 
-func isRoutePathForLongPolling(routePattern string) bool {
-	return routePattern == "/user/events"
-}
-
 func determineRequestPriority(reqCtx reqctx.RequestContext) (ret struct {
 	SignedIn    bool
 	Expensive   bool
@@ -86,7 +85,7 @@ func determineRequestPriority(reqCtx reqctx.RequestContext) (ret struct {
 		ret.SignedIn = true
 	} else {
 		ret.Expensive = isRoutePathExpensive(chiRoutePath)
-		ret.LongPolling = isRoutePathForLongPolling(chiRoutePath)
+		ret.LongPolling = routing.GetRequestRecordInfo(reqCtx).IsLongPolling
 	}
 	return ret
 }

@@ -8,24 +8,24 @@ import (
 	"strings"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	issues_model "code.gitea.io/gitea/models/issues"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/forms"
-	issue_service "code.gitea.io/gitea/services/issue"
+	"gitea.dev/models/db"
+	issues_model "gitea.dev/models/issues"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/context"
+	"gitea.dev/services/forms"
+	issue_service "gitea.dev/services/issue"
 )
 
 // AddTimeManually tracks time manually
 func AddTimeManually(c *context.Context) {
-	form := web.GetForm(c).(*forms.AddTimeManuallyForm)
+	form := web.GetForm[*forms.AddTimeManuallyForm](c)
 	issue := GetActionIssue(c)
 	if c.Written() {
 		return
 	}
 	if !c.Repo.CanUseTimetracker(c, issue, c.Doer) {
-		c.NotFound(nil)
+		c.NotFound()
 		return
 	}
 
@@ -42,7 +42,7 @@ func AddTimeManually(c *context.Context) {
 	}
 
 	if _, err := issues_model.AddTime(c, c.Doer, issue, int64(total.Seconds()), time.Now()); err != nil {
-		c.ServerError("AddTime", err)
+		c.ServerErrorAuto(err)
 		return
 	}
 
@@ -56,14 +56,14 @@ func DeleteTime(c *context.Context) {
 		return
 	}
 	if !c.Repo.CanUseTimetracker(c, issue, c.Doer) {
-		c.NotFound(nil)
+		c.NotFound()
 		return
 	}
 
-	t, err := issues_model.GetTrackedTimeByID(c, c.PathParamInt64("timeid"))
+	t, err := issues_model.GetTrackedTimeByID(c, issue.ID, c.PathParamInt64("timeid"))
 	if err != nil {
 		if db.IsErrNotExist(err) {
-			c.NotFound(err)
+			c.ServerErrorAuto(err)
 			return
 		}
 		c.HTTPError(http.StatusInternalServerError, "GetTrackedTimeByID", err.Error())
@@ -77,7 +77,7 @@ func DeleteTime(c *context.Context) {
 	}
 
 	if err = issues_model.DeleteTime(c, t); err != nil {
-		c.ServerError("DeleteTime", err)
+		c.ServerErrorAuto(err)
 		return
 	}
 
@@ -91,7 +91,7 @@ func UpdateIssueTimeEstimate(ctx *context.Context) {
 		return
 	}
 
-	if !ctx.IsSigned || (!issue.IsPoster(ctx.Doer.ID) && !ctx.Repo.CanWriteIssuesOrPulls(issue.IsPull)) {
+	if !ctx.IsSigned || (!issue.IsPoster(ctx.Doer.ID) && !ctx.Repo.Permission.CanWriteIssuesOrPulls(issue.IsPull)) {
 		ctx.HTTPError(http.StatusForbidden)
 		return
 	}
@@ -111,7 +111,7 @@ func UpdateIssueTimeEstimate(ctx *context.Context) {
 	}
 
 	if err := issue_service.ChangeTimeEstimate(ctx, issue, ctx.Doer, total); err != nil {
-		ctx.ServerError("ChangeTimeEstimate", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

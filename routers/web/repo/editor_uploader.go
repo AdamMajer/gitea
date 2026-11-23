@@ -6,19 +6,19 @@ package repo
 import (
 	"net/http"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/context/upload"
-	files_service "code.gitea.io/gitea/services/repository/files"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/context"
+	"gitea.dev/services/context/upload"
+	files_service "gitea.dev/services/repository/files"
 )
 
 // UploadFileToServer upload file to server file dir not git
 func UploadFileToServer(ctx *context.Context) {
 	file, header, err := ctx.Req.FormFile("file")
 	if err != nil {
-		ctx.ServerError("FormFile", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	defer file.Close()
@@ -45,7 +45,7 @@ func UploadFileToServer(ctx *context.Context) {
 
 	uploaded, err := repo_model.NewUpload(ctx, name, buf, file)
 	if err != nil {
-		ctx.ServerError("NewUpload", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -56,7 +56,7 @@ func UploadFileToServer(ctx *context.Context) {
 func RemoveUploadFileFromServer(ctx *context.Context) {
 	fileUUID := ctx.FormString("file")
 	if err := repo_model.DeleteUploadByUUID(ctx, fileUUID); err != nil {
-		ctx.ServerError("DeleteUploadByUUID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Status(http.StatusNoContent)

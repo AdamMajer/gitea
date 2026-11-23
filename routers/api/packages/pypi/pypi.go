@@ -5,39 +5,44 @@ package pypi
 
 import (
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
-	packages_model "code.gitea.io/gitea/models/packages"
-	packages_module "code.gitea.io/gitea/modules/packages"
-	pypi_module "code.gitea.io/gitea/modules/packages/pypi"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/validation"
-	"code.gitea.io/gitea/routers/api/packages/helper"
-	"code.gitea.io/gitea/services/context"
-	packages_service "code.gitea.io/gitea/services/packages"
+	packages_model "gitea.dev/models/packages"
+	packages_module "gitea.dev/modules/packages"
+	pypi_module "gitea.dev/modules/packages/pypi"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/validation"
+	"gitea.dev/routers/api/packages/helper"
+	"gitea.dev/services/context"
+	packages_service "gitea.dev/services/packages"
 )
 
 // https://peps.python.org/pep-0426/#name
-var (
-	normalizer  = strings.NewReplacer(".", "-", "_", "-")
-	nameMatcher = regexp.MustCompile(`\A(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\.\-_]*[a-zA-Z0-9])\z`)
-)
+var globalVars = sync.OnceValue(func() (ret struct {
+	nameMatcher    *regexp.Regexp
+	versionMatcher *regexp.Regexp
+},
+) {
+	ret.nameMatcher = regexp.MustCompile(`\A(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\.\-_]*[a-zA-Z0-9])\z`)
+	// https://peps.python.org/pep-0440/#appendix-b-parsing-version-strings-with-regular-expressions
+	ret.versionMatcher = regexp.MustCompile(`\Av?` +
+		`(?:[0-9]+!)?` + // epoch
+		`[0-9]+(?:\.[0-9]+)*` + // release segment
+		`(?:[-_\.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_\.]?[0-9]*)?` + // pre-release
+		`(?:-[0-9]+|[-_\.]?(?:post|rev|r)[-_\.]?[0-9]*)?` + // post release
+		`(?:[-_\.]?dev[-_\.]?[0-9]*)?` + // dev release
+		`(?:\+[a-z0-9]+(?:[-_\.][a-z0-9]+)*)?` + // local version
+		`\z`)
+	return ret
+})
 
-// https://peps.python.org/pep-0440/#appendix-b-parsing-version-strings-with-regular-expressions
-var versionMatcher = regexp.MustCompile(`\Av?` +
-	`(?:[0-9]+!)?` + // epoch
-	`[0-9]+(?:\.[0-9]+)*` + // release segment
-	`(?:[-_\.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_\.]?[0-9]*)?` + // pre-release
-	`(?:-[0-9]+|[-_\.]?(?:post|rev|r)[-_\.]?[0-9]*)?` + // post release
-	`(?:[-_\.]?dev[-_\.]?[0-9]*)?` + // dev release
-	`(?:\+[a-z0-9]+(?:[-_\.][a-z0-9]+)*)?` + // local version
-	`\z`)
+var normalizer = strings.NewReplacer(".", "-", "_", "-")
 
 func apiError(ctx *context.Context, status int, obj any) {
 	message := helper.ProcessErrorForUser(ctx, status, obj)
@@ -95,11 +100,7 @@ func DownloadPackageFile(ctx *context.Context) {
 		ctx.Req.Method,
 	)
 	if err != nil {
-		if errors.Is(err, packages_model.ErrPackageNotExist) || errors.Is(err, packages_model.ErrPackageFileNotExist) {
-			apiError(ctx, http.StatusNotFound, err)
-			return
-		}
-		apiError(ctx, http.StatusInternalServerError, err)
+		apiError(ctx, helper.PackageErrorStatus(err), err)
 		return
 	}
 
@@ -230,5 +231,5 @@ func normalizeLabel(label string) string {
 }
 
 func isValidNameAndVersion(packageName, packageVersion string) bool {
-	return nameMatcher.MatchString(packageName) && versionMatcher.MatchString(packageVersion)
+	return globalVars().nameMatcher.MatchString(packageName) && globalVars().versionMatcher.MatchString(packageVersion)
 }

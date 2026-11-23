@@ -6,13 +6,13 @@ package avatars_test
 import (
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
+	"gitea.dev/models/unittest"
 
-	_ "code.gitea.io/gitea/models"
-	_ "code.gitea.io/gitea/models/activities"
-	_ "code.gitea.io/gitea/models/perm/access"
+	_ "gitea.dev/models"
+	_ "gitea.dev/models/activities"
+	_ "gitea.dev/models/perm/access"
 )
 
 func TestMain(m *testing.M) {
-	unittest.MainTest(m)
+	unittest.MainTest(m, &unittest.TestOptions{SkipRepoFixtures: true})
 }

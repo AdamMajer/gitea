@@ -7,23 +7,47 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	auth_model "code.gitea.io/gitea/models/auth"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/routers/web/repo/actions"
+	runnerv1 "gitea.dev/actionslib/runner/v1"
+	actions_model "gitea.dev/models/actions"
+	auth_model "gitea.dev/models/auth"
+	"gitea.dev/models/db"
+	git_model "gitea.dev/models/git"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/commitstatus"
+	"gitea.dev/modules/json"
+	"gitea.dev/routers/web/repo/actions"
 
-	runnerv1 "code.gitea.io/actions-proto-go/runner/v1"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestActionsDeleteRun(t *testing.T) {
 	now := time.Now()
+	outcomes := make(map[string]*mockTaskOutcome)
+	for _, jobName := range []string{"job1", "job2", "job3"} {
+		outcomes[jobName] = &mockTaskOutcome{
+			result: runnerv1.Result_RESULT_SUCCESS,
+			logRows: []*runnerv1.LogRow{
+				{
+					Time:    timestamppb.New(now.Add(4 * time.Second)),
+					Content: "  \U0001F433  docker create image",
+				},
+				{
+					Time:    timestamppb.New(now.Add(5 * time.Second)),
+					Content: jobName,
+				},
+				{
+					Time:    timestamppb.New(now.Add(6 * time.Second)),
+					Content: "\U0001F3C1  Job succeeded",
+				},
+			},
+		}
+	}
 	testCase := struct {
 		treePath         string
 		fileContent      string
@@ -50,59 +74,7 @@ jobs:
     steps:
       - run: echo job3
 `,
-		outcomes: map[string]*mockTaskOutcome{
-			"job1": {
-				result: runnerv1.Result_RESULT_SUCCESS,
-				logRows: []*runnerv1.LogRow{
-					{
-						Time:    timestamppb.New(now.Add(4 * time.Second)),
-						Content: "  \U0001F433  docker create image",
-					},
-					{
-						Time:    timestamppb.New(now.Add(5 * time.Second)),
-						Content: "job1",
-					},
-					{
-						Time:    timestamppb.New(now.Add(6 * time.Second)),
-						Content: "\U0001F3C1  Job succeeded",
-					},
-				},
-			},
-			"job2": {
-				result: runnerv1.Result_RESULT_SUCCESS,
-				logRows: []*runnerv1.LogRow{
-					{
-						Time:    timestamppb.New(now.Add(4 * time.Second)),
-						Content: "  \U0001F433  docker create image",
-					},
-					{
-						Time:    timestamppb.New(now.Add(5 * time.Second)),
-						Content: "job2",
-					},
-					{
-						Time:    timestamppb.New(now.Add(6 * time.Second)),
-						Content: "\U0001F3C1  Job succeeded",
-					},
-				},
-			},
-			"job3": {
-				result: runnerv1.Result_RESULT_SUCCESS,
-				logRows: []*runnerv1.LogRow{
-					{
-						Time:    timestamppb.New(now.Add(4 * time.Second)),
-						Content: "  \U0001F433  docker create image",
-					},
-					{
-						Time:    timestamppb.New(now.Add(5 * time.Second)),
-						Content: "job3",
-					},
-					{
-						Time:    timestamppb.New(now.Add(6 * time.Second)),
-						Content: "\U0001F3C1  Job succeeded",
-					},
-				},
-			},
-		},
+		outcomes: outcomes,
 		expectedStatuses: map[string]string{
 			"job1": actions_model.StatusSuccess.String(),
 			"job2": actions_model.StatusSuccess.String(),
@@ -121,47 +93,66 @@ jobs:
 		opts := getWorkflowCreateFileOptions(user2, apiRepo.DefaultBranch, "create "+testCase.treePath, testCase.fileContent)
 		createWorkflowFile(t, token, user2.Name, apiRepo.Name, testCase.treePath, opts)
 
-		runIndex := ""
+		var runID int64
+		var commitID string
 		for i := 0; i < len(testCase.outcomes); i++ {
 			task := runner.fetchTask(t)
 			jobName := getTaskJobNameByTaskID(t, token, user2.Name, apiRepo.Name, task.Id)
 			outcome := testCase.outcomes[jobName]
 			assert.NotNil(t, outcome)
 			runner.execTask(t, task, outcome)
-			runIndex = task.Context.GetFields()["run_number"].GetStringValue()
-			assert.Equal(t, "1", runIndex)
+			runIndex := task.Context.GetFields()["run_number"].GetStringValue()
+			parsedRunIndex, err := strconv.ParseInt(runIndex, 10, 64)
+			assert.NoError(t, err)
+			run := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{RepoID: apiRepo.ID, Index: parsedRunIndex})
+			runID = run.ID
+			commitID = run.CommitSHA
 		}
 
+		jobs, err := actions_model.GetLatestAttemptJobsByRepoAndRunID(t.Context(), apiRepo.ID, runID)
+		assert.NoError(t, err)
+
 		for i := 0; i < len(testCase.outcomes); i++ {
-			req := NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%s/jobs/%d", user2.Name, apiRepo.Name, runIndex, i))
+			jobID := jobs[i].ID
+			req := NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%d/jobs/%d", user2.Name, apiRepo.Name, runID, jobID))
 			resp := session.MakeRequest(t, req, http.StatusOK)
 			var listResp actions.ViewResponse
 			err := json.Unmarshal(resp.Body.Bytes(), &listResp)
 			assert.NoError(t, err)
 			assert.Len(t, listResp.State.Run.Jobs, 3)
 
-			req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%s/jobs/%d/logs", user2.Name, apiRepo.Name, runIndex, i)).
+			req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%d/jobs/%d/logs", user2.Name, apiRepo.Name, runID, jobID)).
 				AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusOK)
 		}
 
-		req := NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%s", user2.Name, apiRepo.Name, runIndex))
+		req := NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%d", user2.Name, apiRepo.Name, runID))
 		session.MakeRequest(t, req, http.StatusOK)
 
-		req = NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%s/delete", user2.Name, apiRepo.Name, runIndex))
+		req = NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%d/delete", user2.Name, apiRepo.Name, runID))
 		session.MakeRequest(t, req, http.StatusOK)
 
-		req = NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%s/delete", user2.Name, apiRepo.Name, runIndex))
+		statuses, err := git_model.GetLatestCommitStatus(t.Context(), apiRepo.ID, commitID, db.ListOptionsAll)
+		assert.NoError(t, err)
+		assert.Len(t, statuses, 3)
+		for _, status := range statuses {
+			assert.Equal(t, commitstatus.CommitStatusSuccess, status.State)
+			assert.Empty(t, status.TargetURL)
+		}
+		assert.Empty(t, unittest.AssertExistsAndLoadBean(t, &git_model.CommitStatusSummary{RepoID: apiRepo.ID, SHA: commitID}).TargetURL)
+
+		req = NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%d/delete", user2.Name, apiRepo.Name, runID))
 		session.MakeRequest(t, req, http.StatusNotFound)
 
-		req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%s", user2.Name, apiRepo.Name, runIndex))
+		req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%d", user2.Name, apiRepo.Name, runID))
 		session.MakeRequest(t, req, http.StatusNotFound)
 
 		for i := 0; i < len(testCase.outcomes); i++ {
-			req := NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%s/jobs/%d", user2.Name, apiRepo.Name, runIndex, i))
+			jobID := jobs[i].ID
+			req := NewRequest(t, "POST", fmt.Sprintf("/%s/%s/actions/runs/%d/jobs/%d", user2.Name, apiRepo.Name, runID, jobID))
 			session.MakeRequest(t, req, http.StatusNotFound)
 
-			req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%s/jobs/%d/logs", user2.Name, apiRepo.Name, runIndex, i)).
+			req = NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions/runs/%d/jobs/%d/logs", user2.Name, apiRepo.Name, runID, jobID)).
 				AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusNotFound)
 		}

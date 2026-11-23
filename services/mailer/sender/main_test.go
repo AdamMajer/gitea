@@ -4,11 +4,13 @@
 package sender
 
 import (
+	"os"
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
+	"gitea.dev/modules/setting"
 )
 
 func TestMain(m *testing.M) {
-	unittest.MainTest(m)
+	setting.SetupGiteaTestEnv()
+	os.Exit(m.Run())
 }

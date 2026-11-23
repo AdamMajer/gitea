@@ -9,21 +9,23 @@ import (
 	"os"
 	"text/tabwriter"
 
-	user_model "code.gitea.io/gitea/models/user"
+	user_model "gitea.dev/models/user"
 
 	"github.com/urfave/cli/v3"
 )
 
-var microcmdUserList = &cli.Command{
-	Name:   "list",
-	Usage:  "List users",
-	Action: runListUsers,
-	Flags: []cli.Flag{
-		&cli.BoolFlag{
-			Name:  "admin",
-			Usage: "List only admin users",
+func newUserListCommand() *cli.Command {
+	return &cli.Command{
+		Name:   "list",
+		Usage:  "List users",
+		Action: runListUsers,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "admin",
+				Usage: "List only admin users",
+			},
 		},
-	},
+	}
 }
 
 func runListUsers(ctx context.Context, c *cli.Command) error {
@@ -31,7 +33,7 @@ func runListUsers(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 
-	users, err := user_model.GetAllUsers(ctx)
+	users, err := user_model.GetAllUsersForAdminListing(ctx)
 	if err != nil {
 		return err
 	}
@@ -39,17 +41,17 @@ func runListUsers(ctx context.Context, c *cli.Command) error {
 	w := tabwriter.NewWriter(os.Stdout, 5, 0, 1, ' ', 0)
 
 	if c.IsSet("admin") {
-		fmt.Fprintf(w, "ID\tUsername\tEmail\tIsActive\n")
+		fmt.Fprintf(w, "ID\tUsername\tEmail\tIsActive\tType\n")
 		for _, u := range users {
 			if u.IsAdmin {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%t\n", u.ID, u.Name, u.Email, u.IsActive)
+				fmt.Fprintf(w, "%d\t%s\t%s\t%t\t%s\n", u.ID, u.Name, u.Email, u.IsActive, u.Type.DisplayName())
 			}
 		}
 	} else {
 		twofa := user_model.UserList(users).GetTwoFaStatus(ctx)
-		fmt.Fprintf(w, "ID\tUsername\tEmail\tIsActive\tIsAdmin\t2FA\n")
+		fmt.Fprintf(w, "ID\tUsername\tEmail\tIsActive\tIsAdmin\t2FA\tType\n")
 		for _, u := range users {
-			fmt.Fprintf(w, "%d\t%s\t%s\t%t\t%t\t%t\n", u.ID, u.Name, u.Email, u.IsActive, u.IsAdmin, twofa[u.ID])
+			fmt.Fprintf(w, "%d\t%s\t%s\t%t\t%t\t%t\t%s\n", u.ID, u.Name, u.Email, u.IsActive, u.IsAdmin, twofa[u.ID], u.Type.DisplayName())
 		}
 	}
 

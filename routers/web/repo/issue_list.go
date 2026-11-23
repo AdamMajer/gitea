@@ -5,6 +5,7 @@ package repo
 
 import (
 	"bytes"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -12,34 +13,40 @@ import (
 	"strconv"
 	"strings"
 
-	"code.gitea.io/gitea/models/db"
-	git_model "code.gitea.io/gitea/models/git"
-	issues_model "code.gitea.io/gitea/models/issues"
-	"code.gitea.io/gitea/models/organization"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	user_model "code.gitea.io/gitea/models/user"
-	issue_indexer "code.gitea.io/gitea/modules/indexer/issues"
-	db_indexer "code.gitea.io/gitea/modules/indexer/issues/db"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/routers/common"
-	"code.gitea.io/gitea/routers/web/shared/issue"
-	shared_user "code.gitea.io/gitea/routers/web/shared/user"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/convert"
-	issue_service "code.gitea.io/gitea/services/issue"
-	pull_service "code.gitea.io/gitea/services/pull"
+	"gitea.dev/models/db"
+	issues_model "gitea.dev/models/issues"
+	"gitea.dev/models/perm"
+	repo_model "gitea.dev/models/repo"
+	unit_model "gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	issue_indexer "gitea.dev/modules/indexer/issues"
+	db_indexer "gitea.dev/modules/indexer/issues/db"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
+	"gitea.dev/routers/common"
+	"gitea.dev/routers/web/shared/issue"
+	shared_user "gitea.dev/routers/web/shared/user"
+	"gitea.dev/services/context"
+	"gitea.dev/services/convert"
+	issue_service "gitea.dev/services/issue"
+	pull_service "gitea.dev/services/pull"
 )
 
 func retrieveProjectsForIssueList(ctx *context.Context, repo *repo_model.Repository) {
 	ctx.Data["OpenProjects"], ctx.Data["ClosedProjects"] = retrieveProjectsInternal(ctx, repo)
 }
 
-// SearchIssues searches for issues across the repositories that the user has access to
-func SearchIssues(ctx *context.Context) {
+// parseProjectIDsFromQuery parses the comma-separated `project` (preferred) or `projects`
+// query parameter into a slice of int64 IDs.
+func parseProjectIDsFromQuery(ctx *context.Context) []int64 {
+	// FIXME: ISSUE-MULTIPLE-PROJECTS-FILTER: no multiple project filter support yet
+	// Although here parses the project parameter as a slice, the "search" logic is wrong
+	return ctx.FormStringInt64s("project")
+}
+
+// SearchGlobalIssues searches for issues across the repositories that the user has access to
+func SearchGlobalIssues(ctx *context.Context) {
 	before, since, err := context.GetQueryBeforeSince(ctx.Base)
 	if err != nil {
 		ctx.HTTPError(http.StatusUnprocessableEntity, err.Error())
@@ -48,85 +55,22 @@ func SearchIssues(ctx *context.Context) {
 
 	isClosed := common.ParseIssueFilterStateIsClosed(ctx.FormString("state"))
 
-	var (
-		repoIDs   []int64
-		allPublic bool
-	)
-	{
-		// find repos user can access (for issue search)
-		opts := repo_model.SearchRepoOptions{
-			Private:     false,
-			AllPublic:   true,
-			TopicOnly:   false,
-			Collaborate: optional.None[bool](),
-			// This needs to be a column that is not nil in fixtures or
-			// MySQL will return different results when sorting by null in some cases
-			OrderBy: db.SearchOrderByAlphabetically,
-			Actor:   ctx.Doer,
+	repoIDs, allPublic, err := common.SearchIssuesRepoIDs(ctx, common.SearchIssuesRepoIDsOptions{
+		Doer:      ctx.Doer,
+		OwnerName: ctx.FormString("owner"),
+		TeamName:  ctx.FormString("team"),
+	})
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) || errors.Is(err, util.ErrInvalidArgument) {
+			ctx.HTTPError(http.StatusBadRequest, err.Error())
+		} else {
+			ctx.ServerErrorAuto(err)
 		}
-		if ctx.IsSigned {
-			opts.Private = true
-			opts.AllLimited = true
-		}
-		if ctx.FormString("owner") != "" {
-			owner, err := user_model.GetUserByName(ctx, ctx.FormString("owner"))
-			if err != nil {
-				if user_model.IsErrUserNotExist(err) {
-					ctx.HTTPError(http.StatusBadRequest, "Owner not found", err.Error())
-				} else {
-					ctx.HTTPError(http.StatusInternalServerError, "GetUserByName", err.Error())
-				}
-				return
-			}
-			opts.OwnerID = owner.ID
-			opts.AllLimited = false
-			opts.AllPublic = false
-			opts.Collaborate = optional.Some(false)
-		}
-		if ctx.FormString("team") != "" {
-			if ctx.FormString("owner") == "" {
-				ctx.HTTPError(http.StatusBadRequest, "", "Owner organisation is required for filtering on team")
-				return
-			}
-			team, err := organization.GetTeam(ctx, opts.OwnerID, ctx.FormString("team"))
-			if err != nil {
-				if organization.IsErrTeamNotExist(err) {
-					ctx.HTTPError(http.StatusBadRequest, "Team not found", err.Error())
-				} else {
-					ctx.HTTPError(http.StatusInternalServerError, "GetUserByName", err.Error())
-				}
-				return
-			}
-			opts.TeamID = team.ID
-		}
-
-		if opts.AllPublic {
-			allPublic = true
-			opts.AllPublic = false // set it false to avoid returning too many repos, we could filter by indexer
-		}
-		repoIDs, _, err = repo_model.SearchRepositoryIDs(ctx, opts)
-		if err != nil {
-			ctx.HTTPError(http.StatusInternalServerError, "SearchRepositoryIDs", err.Error())
-			return
-		}
-		if len(repoIDs) == 0 {
-			// no repos found, don't let the indexer return all repos
-			repoIDs = []int64{0}
-		}
+		return
 	}
 
 	keyword := ctx.FormTrim("q")
-	if strings.IndexByte(keyword, 0) >= 0 {
-		keyword = ""
-	}
-
-	isPull := optional.None[bool]()
-	switch ctx.FormString("type") {
-	case "pulls":
-		isPull = optional.Some(true)
-	case "issues":
-		isPull = optional.Some(false)
-	}
+	isPull := common.ParseIssueFilterTypeIsPull(ctx.FormString("type"))
 
 	var includedAnyLabels []int64
 	{
@@ -137,7 +81,7 @@ func SearchIssues(ctx *context.Context) {
 		}
 		includedAnyLabels, err = issues_model.GetLabelIDsByNames(ctx, includedLabelNames)
 		if err != nil {
-			ctx.HTTPError(http.StatusInternalServerError, "GetLabelIDsByNames", err.Error())
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
@@ -151,15 +95,12 @@ func SearchIssues(ctx *context.Context) {
 		}
 		includedMilestones, err = issues_model.GetMilestoneIDsByNames(ctx, includedMilestoneNames)
 		if err != nil {
-			ctx.HTTPError(http.StatusInternalServerError, "GetMilestoneIDsByNames", err.Error())
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
 
-	projectID := optional.None[int64]()
-	if v := ctx.FormInt64("project"); v > 0 {
-		projectID = optional.Some(v)
-	}
+	includedProjectIDs := parseProjectIDsFromQuery(ctx)
 
 	// this api is also used in UI,
 	// so the default limit is set to fit UI needs
@@ -182,7 +123,7 @@ func SearchIssues(ctx *context.Context) {
 		IsClosed:            isClosed,
 		IncludedAnyLabelIDs: includedAnyLabels,
 		MilestoneIDs:        includedMilestones,
-		ProjectID:           projectID,
+		ProjectIDs:          includedProjectIDs,
 		SortBy:              issue_indexer.SortByCreatedDesc,
 	}
 
@@ -218,12 +159,12 @@ func SearchIssues(ctx *context.Context) {
 
 	ids, total, err := issue_indexer.SearchIssues(ctx, searchOpt)
 	if err != nil {
-		ctx.HTTPError(http.StatusInternalServerError, "SearchIssues", err.Error())
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	issues, err := issues_model.GetIssuesByIDs(ctx, ids, true)
 	if err != nil {
-		ctx.HTTPError(http.StatusInternalServerError, "FindIssuesByIDs", err.Error())
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -239,7 +180,7 @@ func getUserIDForFilter(ctx *context.Context, queryName string) int64 {
 
 	user, err := user_model.GetUserByName(ctx, userName)
 	if user_model.IsErrUserNotExist(err) {
-		ctx.NotFound(err)
+		ctx.ServerErrorAuto(err)
 		return 0
 	}
 
@@ -262,11 +203,7 @@ func SearchRepoIssuesJSON(ctx *context.Context) {
 	}
 
 	isClosed := common.ParseIssueFilterStateIsClosed(ctx.FormString("state"))
-
 	keyword := ctx.FormTrim("q")
-	if strings.IndexByte(keyword, 0) >= 0 {
-		keyword = ""
-	}
 
 	var mileIDs []int64
 	if part := strings.Split(ctx.FormString("milestones"), ","); len(part) > 0 {
@@ -298,17 +235,10 @@ func SearchRepoIssuesJSON(ctx *context.Context) {
 		}
 	}
 
-	projectID := optional.None[int64]()
-	if v := ctx.FormInt64("project"); v > 0 {
-		projectID = optional.Some(v)
-	}
-
-	isPull := optional.None[bool]()
-	switch ctx.FormString("type") {
-	case "pulls":
-		isPull = optional.Some(true)
-	case "issues":
-		isPull = optional.Some(false)
+	isPull, ok := common.ParseIssueFilterTypeIsPullWithPermission(ctx.Repo.Permission, ctx.FormString("type"))
+	if !ok {
+		ctx.HTTPError(http.StatusForbidden, "no permission to read issues or pulls")
+		return
 	}
 
 	// FIXME: we should be more efficient here
@@ -330,13 +260,20 @@ func SearchRepoIssuesJSON(ctx *context.Context) {
 			Page:     ctx.FormInt("page"),
 			PageSize: convert.ToCorrectPageSize(ctx.FormInt("limit")),
 		},
-		Keyword:   keyword,
-		RepoIDs:   []int64{ctx.Repo.Repository.ID},
-		IsPull:    isPull,
-		IsClosed:  isClosed,
-		ProjectID: projectID,
-		SortBy:    issue_indexer.SortByCreatedDesc,
+		Keyword:  keyword,
+		RepoIDs:  []int64{ctx.Repo.Repository.ID},
+		IsPull:   isPull,
+		IsClosed: isClosed,
+		SortBy:   issue_indexer.SortByCreatedDesc,
 	}
+
+	projectIDs := parseProjectIDsFromQuery(ctx)
+	if len(projectIDs) == 1 && projectIDs[0] == -1 {
+		searchOpt.NoProjectOnly = true
+	} else if len(projectIDs) > 0 {
+		searchOpt.ProjectIDs = projectIDs
+	}
+
 	if since != 0 {
 		searchOpt.UpdatedAfterUnix = optional.Some(since)
 	}
@@ -378,13 +315,13 @@ func SearchRepoIssuesJSON(ctx *context.Context) {
 }
 
 func BatchDeleteIssues(ctx *context.Context) {
-	issues := getActionIssues(ctx)
+	issues := getActionIssues(ctx, perm.AccessModeWrite)
 	if ctx.Written() {
 		return
 	}
 	for _, issue := range issues {
 		if err := issue_service.DeleteIssue(ctx, ctx.Doer, issue); err != nil {
-			ctx.ServerError("DeleteIssue", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
@@ -393,24 +330,23 @@ func BatchDeleteIssues(ctx *context.Context) {
 
 // UpdateIssueStatus change issue's status
 func UpdateIssueStatus(ctx *context.Context) {
-	issues := getActionIssues(ctx)
+	issues := getActionIssues(ctx, perm.AccessModeWrite)
 	if ctx.Written() {
 		return
 	}
 
 	action := ctx.FormString("action")
 	if action != "open" && action != "close" {
-		log.Warn("Unrecognized action: %s", action)
-		ctx.JSONOK()
+		ctx.JSONError("invalid action: " + action)
 		return
 	}
 
 	if _, err := issues.LoadRepositories(ctx); err != nil {
-		ctx.ServerError("LoadRepositories", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if err := issues.LoadPullRequests(ctx); err != nil {
-		ctx.ServerError("LoadPullRequests", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -421,17 +357,15 @@ func UpdateIssueStatus(ctx *context.Context) {
 		if action == "close" && !issue.IsClosed {
 			if err := issue_service.CloseIssue(ctx, issue, ctx.Doer, ""); err != nil {
 				if issues_model.IsErrDependenciesLeft(err) {
-					ctx.JSON(http.StatusPreconditionFailed, map[string]any{
-						"error": ctx.Tr("repo.issues.dependency.issue_batch_close_blocked", issue.Index),
-					})
+					ctx.JSONError(ctx.Tr("repo.issues.dependency.issue_batch_close_blocked", issue.Index))
 					return
 				}
-				ctx.ServerError("CloseIssue", err)
+				ctx.ServerErrorAuto(err)
 				return
 			}
 		} else if action == "open" && issue.IsClosed {
 			if err := issue_service.ReopenIssue(ctx, issue, ctx.Doer, ""); err != nil {
-				ctx.ServerError("ReopenIssue", err)
+				ctx.ServerErrorAuto(err)
 				return
 			}
 		}
@@ -452,29 +386,23 @@ func prepareIssueFilterExclusiveOrderScopes(ctx *context.Context, allLabels []*i
 	ctx.Data["ExclusiveLabelScopes"] = scopes
 }
 
-func renderMilestones(ctx *context.Context) {
+func renderMilestones(ctx *context.Context, projectID int64) {
 	// Get milestones
 	milestones, err := db.Find[issues_model.Milestone](ctx, issues_model.FindMilestoneOptions{
-		RepoID: ctx.Repo.Repository.ID,
+		RepoID:    ctx.Repo.Repository.ID,
+		ProjectID: projectID,
 	})
 	if err != nil {
-		ctx.ServerError("GetAllRepoMilestones", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
-	openMilestones, closedMilestones := issues_model.MilestoneList{}, issues_model.MilestoneList{}
-	for _, milestone := range milestones {
-		if milestone.IsClosed {
-			closedMilestones = append(closedMilestones, milestone)
-		} else {
-			openMilestones = append(openMilestones, milestone)
-		}
-	}
+	openMilestones, closedMilestones := issues_model.MilestoneList(milestones).SplitByOpenClosed()
 	ctx.Data["OpenMilestones"] = openMilestones
 	ctx.Data["ClosedMilestones"] = closedMilestones
 }
 
-func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int64, isPullOption optional.Option[bool]) {
+func prepareIssueFilterAndList(ctx *context.Context, milestoneID int64, projectIDs []int64, isPullOption optional.Option[bool]) {
 	var err error
 	viewType := ctx.FormString("type")
 	sortType := ctx.FormString("sort")
@@ -485,7 +413,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 
 	assigneeID := ctx.FormString("assignee")
 	posterUsername := ctx.FormString("poster")
-	posterUserID := shared_user.GetFilterUserIDByName(ctx, posterUsername)
+	posterUserID := shared_user.GetPossibleDoerUserIDByName(ctx, posterUsername)
 	var mentionedID, reviewRequestedID, reviewedID int64
 
 	if ctx.IsSigned {
@@ -527,7 +455,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 		RepoIDs:           []int64{repo.ID},
 		LabelIDs:          preparedLabelFilter.SelectedLabelIDs,
 		MilestoneIDs:      mileIDs,
-		ProjectID:         projectID,
+		ProjectIDs:        projectIDs,
 		AssigneeID:        assigneeID,
 		MentionedID:       mentionedID,
 		PosterID:          posterUserID,
@@ -536,11 +464,12 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 		IsPull:            isPullOption,
 		IssueIDs:          nil,
 	}
+
 	if keyword != "" {
 		keywordMatchedIssueIDs, _, err = issue_indexer.SearchIssues(ctx, issue_indexer.ToSearchOptions(keyword, statsOpts))
 		if err != nil {
 			if issue_indexer.IsAvailable(ctx) {
-				ctx.ServerError("issueIDsFromSearch", err)
+				ctx.ServerErrorAuto(err)
 				return
 			}
 			ctx.Data["IssueIndexerUnavailable"] = true
@@ -560,7 +489,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 		// Or the keyword is empty, so it doesn't need issueIDs as filter, just get issueStats with statsOpts.
 		issueStats, err = issues_model.GetIssueStats(ctx, statsOpts)
 		if err != nil {
-			ctx.ServerError("GetIssueStats", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
@@ -575,19 +504,19 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 	if repo.IsTimetrackerEnabled(ctx) {
 		totalTrackedTime, err := issues_model.GetIssueTotalTrackedTime(ctx, statsOpts, isShowClosed)
 		if err != nil {
-			ctx.ServerError("GetIssueTotalTrackedTime", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 		ctx.Data["TotalTrackedTime"] = totalTrackedTime
 	}
 
 	// prepare pager
-	total := int(issueStats.OpenCount + issueStats.ClosedCount)
+	total := issueStats.OpenCount + issueStats.ClosedCount
 	if isShowClosed.Has() {
-		total = util.Iif(isShowClosed.Value(), int(issueStats.ClosedCount), int(issueStats.OpenCount))
+		total = util.Iif(isShowClosed.Value(), issueStats.ClosedCount, issueStats.OpenCount)
 	}
 	page := max(ctx.FormInt("page"), 1)
-	pager := context.NewPagination(total, setting.UI.IssuePagingNum, page, 5)
+	pager := context.NewPagerBuilder(ctx).TotalCount(total).PerPageLimit(setting.UI.IssuePagingNum).CurPage(page).Build()
 
 	// prepare real issue list:
 	var issues issues_model.IssueList
@@ -597,7 +526,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 		// In either case, no need to use keyword anymore
 		searchResult, err := db_indexer.GetIndexer().FindWithIssueOptions(ctx, &issues_model.IssuesOptions{
 			Paginator: &db.ListOptions{
-				Page:     pager.Paginater.Current(),
+				Page:     pager.Paginator.Current(),
 				PageSize: setting.UI.IssuePagingNum,
 			},
 			RepoIDs:           []int64{repo.ID},
@@ -607,7 +536,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 			ReviewRequestedID: reviewRequestedID,
 			ReviewedID:        reviewedID,
 			MilestoneIDs:      mileIDs,
-			ProjectID:         projectID,
+			ProjectIDs:        projectIDs,
 			IsClosed:          isShowClosed,
 			IsPull:            isPullOption,
 			LabelIDs:          preparedLabelFilter.SelectedLabelIDs,
@@ -615,26 +544,26 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 			IssueIDs:          keywordMatchedIssueIDs,
 		})
 		if err != nil {
-			ctx.ServerError("DBIndexer.Search", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 		issueIDs := issue_indexer.SearchResultToIDSlice(searchResult)
 		issues, err = issues_model.GetIssuesByIDs(ctx, issueIDs, true)
 		if err != nil {
-			ctx.ServerError("GetIssuesByIDs", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}
 
 	approvalCounts, err := issues.GetApprovalCounts(ctx)
 	if err != nil {
-		ctx.ServerError("ApprovalCounts", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if ctx.IsSigned {
 		if err := issues.LoadIsRead(ctx, ctx.Doer.ID); err != nil {
-			ctx.ServerError("LoadIsRead", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	} else {
@@ -643,19 +572,14 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 		}
 	}
 
-	commitStatuses, lastStatus, err := pull_service.GetIssuesAllCommitStatus(ctx, issues)
+	commitStatuses, lastStatus, err := pull_service.GetIssuesAllCommitStatus(ctx, ctx.Doer, issues)
 	if err != nil {
-		ctx.ServerError("GetIssuesAllCommitStatus", err)
+		ctx.ServerErrorAuto(err)
 		return
-	}
-	if !ctx.Repo.CanRead(unit.TypeActions) {
-		for key := range commitStatuses {
-			git_model.CommitStatusesHideActionsURL(ctx, commitStatuses[key])
-		}
 	}
 
 	if err := issues.LoadAttributes(ctx); err != nil {
-		ctx.ServerError("issues.LoadAttributes", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -666,13 +590,10 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 	// Get assignees.
 	assigneeUsers, err := repo_model.GetRepoAssignees(ctx, repo)
 	if err != nil {
-		ctx.ServerError("GetRepoAssignees", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
-	handleMentionableAssigneesAndTeams(ctx, shared_user.MakeSelfOnTop(ctx.Doer, assigneeUsers))
-	if ctx.Written() {
-		return
-	}
+	ctx.Data["Assignees"] = shared_user.MakeSelfOnTop(ctx.Doer, assigneeUsers)
 
 	ctx.Data["IssueRefEndNames"], ctx.Data["IssueRefURLs"] = issue_service.GetRefEndNamesAndURLs(issues, ctx.Repo.RepoLink)
 
@@ -703,14 +624,14 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 
 	pinned, err := issues_model.GetPinnedIssues(ctx, repo.ID, isPullOption.Value())
 	if err != nil {
-		ctx.ServerError("GetPinnedIssues", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	showArchivedLabels := ctx.FormBool("archived_labels")
 	ctx.Data["ShowArchivedLabels"] = showArchivedLabels
 	ctx.Data["PinnedIssues"] = pinned
-	ctx.Data["IsRepoAdmin"] = ctx.IsSigned && (ctx.Repo.IsAdmin() || ctx.Doer.IsAdmin)
+	ctx.Data["IsRepoAdmin"] = ctx.Repo.Permission.IsAdmin()
 	ctx.Data["IssueStats"] = issueStats
 	ctx.Data["OpenCount"] = issueStats.OpenCount
 	ctx.Data["ClosedCount"] = issueStats.ClosedCount
@@ -718,7 +639,7 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 	ctx.Data["ViewType"] = viewType
 	ctx.Data["SortType"] = sortType
 	ctx.Data["MilestoneID"] = milestoneID
-	ctx.Data["ProjectID"] = projectID
+	ctx.Data["ProjectIDs"] = projectIDs
 	ctx.Data["AssigneeID"] = assigneeID
 	ctx.Data["PosterUsername"] = posterUsername
 	ctx.Data["Keyword"] = keyword
@@ -731,7 +652,6 @@ func prepareIssueFilterAndList(ctx *context.Context, milestoneID, projectID int6
 	default:
 		ctx.Data["State"] = "open"
 	}
-	pager.AddParamFromRequest(ctx.Req)
 	ctx.Data["Page"] = pager
 }
 
@@ -745,6 +665,9 @@ func Issues(ctx *context.Context) {
 		}
 		ctx.Data["Title"] = ctx.Tr("repo.pulls")
 		ctx.Data["PageIsPullList"] = true
+		canCreatePull := ctx.Repo.PullRequestCtx.CanCreateNewPull()
+		ctx.Data["ShowNewPullButton"] = canCreatePull
+		ctx.Data["ShowCompareBranchButton"] = !canCreatePull
 		prepareRecentlyPushedNewBranches(ctx)
 		if ctx.Written() {
 			return
@@ -756,20 +679,26 @@ func Issues(ctx *context.Context) {
 		}
 		ctx.Data["Title"] = ctx.Tr("repo.issues")
 		ctx.Data["PageIsIssueList"] = true
-		ctx.Data["NewIssueChooseTemplate"] = issue_service.HasTemplatesOrContactLinks(ctx.Repo.Repository, ctx.Repo.GitRepo)
+		ctx.Data["NewIssueChooseTemplate"] = issue_service.HasTemplatesOrContactLinks(ctx, ctx.Repo.Repository, ctx.Repo.GitRepo)
+
+		restriction := ctx.Repo.Repository.MustGetUnit(ctx, unit_model.TypeIssues).IssuesConfig().CreationRestriction
+		err := issue_service.CheckCreationRestriction(ctx.Repo.Permission, unit_model.TypeIssues, restriction)
+		ctx.Data["ShowNewIssueButton"] = !ctx.Repo.Repository.IsArchived && err == nil
 	}
 
-	prepareIssueFilterAndList(ctx, ctx.FormInt64("milestone"), ctx.FormInt64("project"), optional.Some(isPullList))
+	projectIDs := parseProjectIDsFromQuery(ctx)
+
+	prepareIssueFilterAndList(ctx, ctx.FormInt64("milestone"), projectIDs, optional.Some(isPullList))
 	if ctx.Written() {
 		return
 	}
 
-	renderMilestones(ctx)
+	renderMilestones(ctx, 0)
 	if ctx.Written() {
 		return
 	}
 
-	ctx.Data["CanWriteIssuesOrPulls"] = ctx.Repo.CanWriteIssuesOrPulls(isPullList)
+	ctx.Data["CanWriteIssuesOrPulls"] = ctx.Repo.Permission.CanWriteIssuesOrPulls(isPullList)
 
 	ctx.HTML(http.StatusOK, tplIssues)
 }

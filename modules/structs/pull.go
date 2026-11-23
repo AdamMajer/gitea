@@ -5,6 +5,8 @@ package structs
 
 import (
 	"time"
+
+	"gitea.dev/modules/optional"
 )
 
 // PullRequest represents a pull request
@@ -61,6 +63,8 @@ type PullRequest struct {
 
 	// Whether the pull request can be merged
 	Mergeable bool `json:"mergeable"`
+	// The scheduled auto merge, null if the pull request is not scheduled to auto merge
+	AutoMerge *PullRequestAutoMerge `json:"auto_merge"`
 	// Whether the pull request has been merged
 	HasMerged bool `json:"merged"`
 	// swagger:strfmt date-time
@@ -91,6 +95,20 @@ type PullRequest struct {
 
 	// The pin order for the pull request
 	PinOrder int `json:"pin_order"`
+	// The version of the pull request content for optimistic locking
+	ContentVersion int `json:"content_version"`
+}
+
+// PullRequestAutoMerge represents a pull request scheduled to auto merge when all checks succeed
+type PullRequestAutoMerge struct {
+	// The user who scheduled the auto merge
+	EnabledBy *User `json:"enabled_by"`
+	// The merge method that will be used, eg: "merge", "rebase", "rebase-merge", "squash", "fast-forward-only"
+	MergeMethod string `json:"merge_method"`
+	// The title of the resulting merge commit
+	CommitTitle string `json:"commit_title"`
+	// The message of the resulting merge commit
+	CommitMessage string `json:"commit_message"`
 }
 
 // PRBranchInfo information about a branch
@@ -135,7 +153,7 @@ type CreatePullRequestOption struct {
 	// The list of label IDs to assign to the pull request
 	Labels []int64 `json:"labels"`
 	// swagger:strfmt date-time
-	Deadline *time.Time `json:"due_date"`
+	Deadline optional.Option[*string] `json:"due_date,omitzero"`
 	// The list of reviewer usernames
 	Reviewers []string `json:"reviewers"`
 	// The list of team reviewer names
@@ -162,12 +180,15 @@ type EditPullRequestOption struct {
 	Labels []int64 `json:"labels"`
 	// The new state for the pull request
 	State *string `json:"state"`
+	// Deadline is the updated due date for the pull request, use null or empty string to remove the deadline
 	// swagger:strfmt date-time
-	Deadline *time.Time `json:"due_date"`
+	Deadline optional.Option[*string] `json:"due_date,omitzero"`
 	// Whether to remove the current deadline
 	RemoveDeadline *bool `json:"unset_due_date"`
 	// Whether to allow maintainer edits
 	AllowMaintainerEdit *bool `json:"allow_maintainer_edit"`
+	// The current version of the pull request content to detect conflicts during editing
+	ContentVersion *int `json:"content_version"`
 }
 
 // ChangedFile store information about files affected by the pull request

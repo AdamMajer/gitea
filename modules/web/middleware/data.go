@@ -7,11 +7,16 @@ import (
 	"context"
 	"time"
 
-	"code.gitea.io/gitea/modules/reqctx"
-	"code.gitea.io/gitea/modules/setting"
+	"gitea.dev/modules/public"
+	"gitea.dev/modules/reqctx"
+	"gitea.dev/modules/setting"
 )
 
-const ContextDataKeySignedUser = "SignedUser"
+const (
+	ContextDataKeySignedUser = "SignedUser"
+	// ContextDataKeyImpersonator holds the admin acting as the signed-in user, if any.
+	ContextDataKeyImpersonator = "Impersonator"
+)
 
 func GetContextData(c context.Context) reqctx.ContextData {
 	if rc := reqctx.GetRequestDataStore(c); rc != nil {
@@ -31,10 +36,10 @@ func CommonTemplateContextData() reqctx.ContextData {
 		"ShowFooterVersion":             setting.Other.ShowFooterVersion,
 		"DisableDownloadSourceArchives": setting.Repository.DisableDownloadSourceArchives,
 
-		"EnableSwagger":      setting.API.EnableSwagger,
-		"EnableOpenIDSignIn": setting.Service.EnableOpenIDSignIn,
-		"PageStartTime":      time.Now(),
+		"EnableSwagger": setting.API.EnableSwagger,
+		"PageStartTime": time.Now(),
 
 		"RunModeIsProd": setting.IsProd,
+		"ViteModeIsDev": public.IsViteDevMode(),
 	}
 }

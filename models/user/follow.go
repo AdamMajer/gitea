@@ -6,8 +6,11 @@ package user
 import (
 	"context"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/timeutil"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
+
+	"xorm.io/builder"
 )
 
 // Follow represents relations of user and their followers.
@@ -24,12 +27,15 @@ func init() {
 
 // IsFollowing returns true if user is following followID.
 func IsFollowing(ctx context.Context, userID, followID int64) bool {
-	has, _ := db.GetEngine(ctx).Get(&Follow{UserID: userID, FollowID: followID})
+	has, _ := db.Exist[Follow](ctx, builder.Eq{"user_id": userID, "follow_id": followID})
 	return has
 }
 
 // FollowUser marks someone be another's follower.
 func FollowUser(ctx context.Context, user, follow *User) (err error) {
+	if !follow.IsFollowable() {
+		return util.NewInvalidArgumentErrorf("user %d can not be followed", follow.ID)
+	}
 	if user.ID == follow.ID || IsFollowing(ctx, user.ID, follow.ID) {
 		return nil
 	}

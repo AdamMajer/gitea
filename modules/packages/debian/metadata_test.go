@@ -7,13 +7,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
+	"strings"
 	"testing"
 
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/zstd"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/zstd"
 
-	"github.com/blakesmith/ar"
 	"github.com/stretchr/testify/assert"
 	"github.com/ulikunitz/xz"
 )
@@ -28,49 +29,39 @@ const (
 )
 
 func TestParsePackage(t *testing.T) {
-	createArchive := func(files map[string][]byte) io.Reader {
-		var buf bytes.Buffer
-		aw := ar.NewWriter(&buf)
-		aw.WriteGlobalHeader()
-		for filename, content := range files {
-			hdr := &ar.Header{
-				Name: filename,
-				Mode: 0o600,
-				Size: int64(len(content)),
-			}
-			aw.WriteHeader(hdr)
-			aw.Write(content)
-		}
-		return &buf
+	member := func(name, content string) string {
+		return fmt.Sprintf("%-48s%-10d`\n%s%s", name, len(content), content, strings.Repeat("\n", len(content)%2))
 	}
+	debianBinary := member("debian-binary", "2.0\n")
 
-	t.Run("MissingControlFile", func(t *testing.T) {
-		data := createArchive(map[string][]byte{"dummy.txt": {}})
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	tw.WriteHeader(&tar.Header{
+		Name: "control",
+		Mode: 0o600,
+		Size: 50,
+	})
+	tw.Write([]byte("Package: gitea\nVersion: 1.0.0\nArchitecture: amd64\n"))
+	tw.Close()
 
-		p, err := ParsePackage(data)
-		assert.Nil(t, p)
-		assert.ErrorIs(t, err, ErrMissingControlFile)
+	t.Run("Invalid", func(t *testing.T) {
+		for data, expected := range map[string]error{
+			"!<ARCH>\n" + debianBinary:                                                GlobalVars().ErrInvalidArchive,
+			arMagic + debianBinary[:20]:                                               GlobalVars().ErrInvalidArchive,
+			arMagic + debianBinary[:62]:                                               GlobalVars().ErrInvalidArchive,
+			arMagic + member("control.tar", "")[:58] + "\n\n":                         GlobalVars().ErrInvalidArchive,
+			arMagic + fmt.Sprintf("%-48s%-10d`\n", "control.tar", -1):                 GlobalVars().ErrInvalidArchive,
+			arMagic + member("dummy.txt", "x"):                                        GlobalVars().ErrMissingControlFile,
+			arMagic + member("control.tar", "") + member("control.tar", buf.String()): GlobalVars().ErrMissingControlFile,
+			arMagic + member("control.tar.foo", ""):                                   GlobalVars().ErrUnsupportedCompression,
+		} {
+			p, err := ParsePackage(strings.NewReader(data))
+			assert.Nil(t, p)
+			assert.ErrorIs(t, err, expected, "%q", data)
+		}
 	})
 
 	t.Run("Compression", func(t *testing.T) {
-		t.Run("Unsupported", func(t *testing.T) {
-			data := createArchive(map[string][]byte{"control.tar.foo": {}})
-
-			p, err := ParsePackage(data)
-			assert.Nil(t, p)
-			assert.ErrorIs(t, err, ErrUnsupportedCompression)
-		})
-
-		var buf bytes.Buffer
-		tw := tar.NewWriter(&buf)
-		tw.WriteHeader(&tar.Header{
-			Name: "control",
-			Mode: 0o600,
-			Size: 50,
-		})
-		tw.Write([]byte("Package: gitea\nVersion: 1.0.0\nArchitecture: amd64\n"))
-		tw.Close()
-
 		cases := []struct {
 			Extension     string
 			WriterFactory func(io.Writer) io.WriteCloser
@@ -110,21 +101,12 @@ func TestParsePackage(t *testing.T) {
 				w.Write(buf.Bytes())
 				w.Close()
 
-				data := createArchive(map[string][]byte{"control.tar" + c.Extension: cbuf.Bytes()})
-
-				p, err := ParsePackage(data)
-				assert.NotNil(t, p)
-				assert.NoError(t, err)
-				assert.Equal(t, "gitea", p.Name)
-
-				t.Run("TrailingSlash", func(t *testing.T) {
-					data := createArchive(map[string][]byte{"control.tar" + c.Extension + "/": cbuf.Bytes()})
-
-					p, err := ParsePackage(data)
+				for _, suffix := range []string{"", "/"} {
+					p, err := ParsePackage(strings.NewReader(arMagic + debianBinary + member("control.tar"+c.Extension+suffix, cbuf.String())))
 					assert.NotNil(t, p)
 					assert.NoError(t, err)
 					assert.Equal(t, "gitea", p.Name)
-				})
+				}
 			})
 		}
 	})
@@ -141,7 +123,7 @@ func TestParseControlFile(t *testing.T) {
 		for _, name := range []string{"", "-cd"} {
 			p, err := ParseControlFile(buildContent(name, packageVersion, packageArchitecture))
 			assert.Nil(t, p)
-			assert.ErrorIs(t, err, ErrInvalidName)
+			assert.ErrorIs(t, err, GlobalVars().ErrInvalidName)
 		}
 	})
 
@@ -149,14 +131,14 @@ func TestParseControlFile(t *testing.T) {
 		for _, version := range []string{"", "1-", ":1.0", "1_0"} {
 			p, err := ParseControlFile(buildContent(packageName, version, packageArchitecture))
 			assert.Nil(t, p)
-			assert.ErrorIs(t, err, ErrInvalidVersion)
+			assert.ErrorIs(t, err, GlobalVars().ErrInvalidVersion)
 		}
 	})
 
 	t.Run("InvalidArchitecture", func(t *testing.T) {
 		p, err := ParseControlFile(buildContent(packageName, packageVersion, ""))
 		assert.Nil(t, p)
-		assert.ErrorIs(t, err, ErrInvalidArchitecture)
+		assert.ErrorIs(t, err, GlobalVars().ErrInvalidArchitecture)
 	})
 
 	t.Run("Valid", func(t *testing.T) {
@@ -184,4 +166,63 @@ func TestParseControlFile(t *testing.T) {
 			assert.NotNil(t, p)
 		}
 	})
+
+	t.Run("SingleStanzaOnly", func(t *testing.T) {
+		// A control file with a trailing stanza must not leak the extra fields into
+		// p.Control, otherwise buildPackagesIndices would emit a second package entry
+		// with an attacker-chosen Filename into the repository "Packages" index.
+		content := bytes.NewBufferString("Package: realpkg\nVersion: 1.0.0\nArchitecture: amd64\nMaintainer: a <a@b.c>\nDescription: real\n\nPackage: openssl\nVersion: 99.0\nArchitecture: amd64\nFilename: pool/main/o/openssl/evil.deb\nDescription: spoofed\n")
+
+		p, err := ParseControlFile(content)
+		assert.NoError(t, err)
+		assert.NotNil(t, p)
+		assert.Equal(t, "realpkg", p.Name)
+		assert.Equal(t, "1.0.0", p.Version)
+		assert.NotContains(t, p.Control, "openssl")
+		assert.NotContains(t, p.Control, "evil.deb")
+	})
+}
+
+func TestValidateDistributionOrComponent(t *testing.T) {
+	bad := []string{
+		"",
+		".",
+		"..",
+		"-stable",
+		".hidden",
+		"a/b",
+		"a b",
+		"bookworm\nSigned-By: evil",
+		"main\nFilename: pool/x",
+		"a\tb",
+	}
+	for _, name := range bad {
+		assert.False(t, IsValidDistributionOrComponent(name), "bad=%q", name)
+	}
+
+	good := []string{
+		"stable",
+		"bookworm",
+		"bookworm-backports",
+		"stable-updates",
+		"main",
+		"non-free-firmware",
+		"a",
+		"1",
+	}
+	for _, name := range good {
+		assert.True(t, IsValidDistributionOrComponent(name), "good=%q", name)
+	}
+}
+
+// TestParseControlFileMultilineDescription verifies a multi-line Description is assembled in order
+// (the parser accumulates it in a strings.Builder); it guards the assembled value, not its timing.
+func TestParseControlFileMultilineDescription(t *testing.T) {
+	var buf bytes.Buffer
+	buf.WriteString("Package: testpkg\nVersion: 1.0\nArchitecture: amd64\nDescription: short summary\n more details\n even more\n")
+
+	p, err := ParseControlFile(&buf)
+	assert.NoError(t, err)
+	assert.NotNil(t, p)
+	assert.Equal(t, "short summary more details even more", p.Metadata.Description)
 }

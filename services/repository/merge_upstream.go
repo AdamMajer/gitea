@@ -7,15 +7,16 @@ import (
 	"errors"
 	"fmt"
 
-	issue_model "code.gitea.io/gitea/models/issues"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/gitrepo"
-	repo_module "code.gitea.io/gitea/modules/repository"
-	"code.gitea.io/gitea/modules/reqctx"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/services/pull"
+	issue_model "gitea.dev/models/issues"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	repo_module "gitea.dev/modules/repository"
+	"gitea.dev/modules/reqctx"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/pull"
 )
 
 // MergeUpstream merges the base repository's default branch into the fork repository's current branch.
@@ -23,10 +24,8 @@ func MergeUpstream(ctx reqctx.RequestContext, doer *user_model.User, repo *repo_
 	if err = repo.MustNotBeArchived(); err != nil {
 		return "", err
 	}
-	if err = repo.GetBaseRepo(ctx); err != nil {
-		return "", err
-	}
-	divergingInfo, err := GetUpstreamDivergingInfo(ctx, repo, branch)
+
+	divergingInfo, err := GetUpstreamDivergingInfo(ctx, doer, repo, branch)
 	if err != nil {
 		return "", err
 	}
@@ -34,7 +33,7 @@ func MergeUpstream(ctx reqctx.RequestContext, doer *user_model.User, repo *repo_
 		return "up-to-date", nil
 	}
 
-	err = gitrepo.Push(ctx, repo.BaseRepo, repo, git.PushOptions{
+	err = git.PushManaged(ctx, repo.BaseRepo, repo, git.PushOptions{
 		Branch: fmt.Sprintf("%s:%s", divergingInfo.BaseBranchName, branch),
 		Env:    repo_module.PushingEnvironment(doer, repo),
 	})
@@ -75,7 +74,7 @@ func MergeUpstream(ctx reqctx.RequestContext, doer *user_model.User, repo *repo_
 		BaseBranch: divergingInfo.BaseBranchName,
 	}
 	fakeIssue.PullRequest = fakePR
-	err = pull.Update(ctx, fakePR, doer, "merge upstream", false)
+	err = pull.Update(fakePR, doer, "merge upstream", false)
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +89,7 @@ type UpstreamDivergingInfo struct {
 }
 
 // GetUpstreamDivergingInfo returns the information about the divergence between the fork repository's branch and the base repository's default branch.
-func GetUpstreamDivergingInfo(ctx reqctx.RequestContext, forkRepo *repo_model.Repository, forkBranch string) (*UpstreamDivergingInfo, error) {
+func GetUpstreamDivergingInfo(ctx reqctx.RequestContext, doer *user_model.User, forkRepo *repo_model.Repository, forkBranch string) (*UpstreamDivergingInfo, error) {
 	if !forkRepo.IsFork {
 		return nil, util.NewInvalidArgumentErrorf("repo is not a fork")
 	}
@@ -101,6 +100,14 @@ func GetUpstreamDivergingInfo(ctx reqctx.RequestContext, forkRepo *repo_model.Re
 
 	if err := forkRepo.GetBaseRepo(ctx); err != nil {
 		return nil, err
+	}
+
+	// The doer must still be able to read the base repository's code. Otherwise a fork created
+	// while the base repo was public could keep pulling commits after it turned private.
+	if basePerm, err := access_model.GetDoerRepoPermission(ctx, forkRepo.BaseRepo, doer); err != nil {
+		return nil, err
+	} else if !basePerm.CanRead(unit.TypeCode) {
+		return nil, util.NewPermissionDeniedErrorf("permission denied to read base repo %d", forkRepo.BaseRepo.ID)
 	}
 
 	// Do the best to follow the GitHub's behavior, suppose there is a `branch-a` in fork repo:

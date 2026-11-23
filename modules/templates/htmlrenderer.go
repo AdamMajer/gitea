@@ -14,14 +14,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	texttemplate "text/template"
 
-	"code.gitea.io/gitea/modules/assetfs"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates/scopedtmpl"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/assetfs"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates/scopedtmpl"
+	"gitea.dev/modules/util"
 )
 
 type TemplateExecutor scopedtmpl.TemplateExecutor
@@ -81,62 +82,72 @@ type templateErrorPrettier struct {
 	assets *assetfs.LayeredFS
 }
 
-var reGenericTemplateError = regexp.MustCompile(`^template: (.*):([0-9]+): (.*)`)
+var globalVars = sync.OnceValue(func() (ret struct {
+	reGenericTemplateError      *regexp.Regexp
+	reFuncNotDefinedError       *regexp.Regexp
+	reUnexpectedOperandError    *regexp.Regexp
+	reExpectedEndError          *regexp.Regexp
+	reTemplateExecutingError    *regexp.Regexp
+	reTemplateExecutingErrorMsg *regexp.Regexp
+	mailSubjectSplit            *regexp.Regexp
+	codeMatcher                 *regexp.Regexp
+},
+) {
+	ret.reGenericTemplateError = regexp.MustCompile(`^template: (.*):([0-9]+): (.*)`)
+	ret.reFuncNotDefinedError = regexp.MustCompile(`^template: (.*):([0-9]+): (function "(.*)" not defined)`)
+	ret.reUnexpectedOperandError = regexp.MustCompile(`^template: (.*):([0-9]+): (unexpected "(.*)" in operand)`)
+	ret.reExpectedEndError = regexp.MustCompile(`^template: (.*):([0-9]+): (expected end; found (.*))`)
+	ret.reTemplateExecutingError = regexp.MustCompile(`^template: (.*):([1-9][0-9]*):([1-9][0-9]*): (executing .*)`)
+	ret.reTemplateExecutingErrorMsg = regexp.MustCompile(`^executing "(.*)" at <(.*)>: `)
+	ret.mailSubjectSplit = regexp.MustCompile(`(?m)^-{3,}\s*$`)
+	// Match text that is between back ticks.
+	ret.codeMatcher = regexp.MustCompile("`([^`]+)`")
+	return ret
+})
 
 func (p *templateErrorPrettier) handleGenericTemplateError(err error) string {
-	groups := reGenericTemplateError.FindStringSubmatch(err.Error())
+	groups := globalVars().reGenericTemplateError.FindStringSubmatch(err.Error())
 	if len(groups) != 4 {
 		return ""
 	}
 	tmplName, lineStr, message := groups[1], groups[2], groups[3]
-	return p.makeDetailedError(message, tmplName, lineStr, -1, "")
+	return p.makeDetailedError(message, tmplName, lineStr, "", "")
 }
 
-var reFuncNotDefinedError = regexp.MustCompile(`^template: (.*):([0-9]+): (function "(.*)" not defined)`)
-
 func (p *templateErrorPrettier) handleFuncNotDefinedError(err error) string {
-	groups := reFuncNotDefinedError.FindStringSubmatch(err.Error())
+	groups := globalVars().reFuncNotDefinedError.FindStringSubmatch(err.Error())
 	if len(groups) != 5 {
 		return ""
 	}
 	tmplName, lineStr, message, funcName := groups[1], groups[2], groups[3], groups[4]
 	funcName, _ = strconv.Unquote(`"` + funcName + `"`)
-	return p.makeDetailedError(message, tmplName, lineStr, -1, funcName)
+	return p.makeDetailedError(message, tmplName, lineStr, "", funcName)
 }
 
-var reUnexpectedOperandError = regexp.MustCompile(`^template: (.*):([0-9]+): (unexpected "(.*)" in operand)`)
-
 func (p *templateErrorPrettier) handleUnexpectedOperandError(err error) string {
-	groups := reUnexpectedOperandError.FindStringSubmatch(err.Error())
+	groups := globalVars().reUnexpectedOperandError.FindStringSubmatch(err.Error())
 	if len(groups) != 5 {
 		return ""
 	}
 	tmplName, lineStr, message, unexpected := groups[1], groups[2], groups[3], groups[4]
 	unexpected, _ = strconv.Unquote(`"` + unexpected + `"`)
-	return p.makeDetailedError(message, tmplName, lineStr, -1, unexpected)
+	return p.makeDetailedError(message, tmplName, lineStr, "", unexpected)
 }
 
-var reExpectedEndError = regexp.MustCompile(`^template: (.*):([0-9]+): (expected end; found (.*))`)
-
 func (p *templateErrorPrettier) handleExpectedEndError(err error) string {
-	groups := reExpectedEndError.FindStringSubmatch(err.Error())
+	groups := globalVars().reExpectedEndError.FindStringSubmatch(err.Error())
 	if len(groups) != 5 {
 		return ""
 	}
 	tmplName, lineStr, message, unexpected := groups[1], groups[2], groups[3], groups[4]
-	return p.makeDetailedError(message, tmplName, lineStr, -1, unexpected)
+	return p.makeDetailedError(message, tmplName, lineStr, "", unexpected)
 }
 
-var (
-	reTemplateExecutingError    = regexp.MustCompile(`^template: (.*):([1-9][0-9]*):([1-9][0-9]*): (executing .*)`)
-	reTemplateExecutingErrorMsg = regexp.MustCompile(`^executing "(.*)" at <(.*)>: `)
-)
-
 func (p *templateErrorPrettier) handleTemplateRenderingError(err error) string {
-	if groups := reTemplateExecutingError.FindStringSubmatch(err.Error()); len(groups) > 0 {
+	if groups := globalVars().reTemplateExecutingError.FindStringSubmatch(err.Error()); len(groups) > 0 {
 		tmplName, lineStr, posStr, msgPart := groups[1], groups[2], groups[3], groups[4]
 		target := ""
-		if groups = reTemplateExecutingErrorMsg.FindStringSubmatch(msgPart); len(groups) > 0 {
+		if groups = globalVars().reTemplateExecutingErrorMsg.FindStringSubmatch(msgPart); len(groups) > 0 {
 			target = groups[2]
 		}
 		return p.makeDetailedError(msgPart, tmplName, lineStr, posStr, target)
@@ -154,20 +165,20 @@ func HandleTemplateRenderingError(err error) string {
 
 const dashSeparator = "----------------------------------------------------------------------"
 
-func (p *templateErrorPrettier) makeDetailedError(errMsg, tmplName string, lineNum, posNum any, target string) string {
+func (p *templateErrorPrettier) makeDetailedError(errMsg, tmplName, lineNumStr, posNumStr, target string) string {
 	code, layer, err := p.assets.ReadLayeredFile(tmplName + ".tmpl")
 	if err != nil {
 		return fmt.Sprintf("template error: %s, and unable to find template file %q", errMsg, tmplName)
 	}
-	line, err := util.ToInt64(lineNum)
+	line, err := strconv.Atoi(lineNumStr)
 	if err != nil {
-		return fmt.Sprintf("template error: %s, unable to parse template %q line number %q", errMsg, tmplName, lineNum)
+		return fmt.Sprintf("template error: %s, unable to parse template %q line number %s", errMsg, tmplName, lineNumStr)
 	}
-	pos, err := util.ToInt64(posNum)
+	pos, err := strconv.Atoi(util.IfZero(posNumStr, "-1"))
 	if err != nil {
-		return fmt.Sprintf("template error: %s, unable to parse template %q pos number %q", errMsg, tmplName, posNum)
+		return fmt.Sprintf("template error: %s, unable to parse template %q pos number %s", errMsg, tmplName, posNumStr)
 	}
-	detail := extractErrorLine(code, int(line), int(pos), target)
+	detail := extractErrorLine(code, line, pos, target)
 
 	var msg string
 	if pos >= 0 {

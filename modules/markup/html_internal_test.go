@@ -5,13 +5,14 @@ package markup
 
 import (
 	"fmt"
+	"html/template"
 	"strconv"
 	"strings"
 	"testing"
 
-	"code.gitea.io/gitea/modules/setting"
-	testModule "code.gitea.io/gitea/modules/test"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/setting"
+	testModule "gitea.dev/modules/test"
+	"gitea.dev/modules/util"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -23,12 +24,12 @@ const (
 
 // externalIssueLink an HTML link to an alphanumeric-style issue
 func externalIssueLink(baseURL, class, name string) string {
-	return link(util.URLJoin(baseURL, name), class, name)
+	return link(strings.TrimSuffix(baseURL, "/")+"/"+name, class, name)
 }
 
 // numericLink an HTML to a numeric-style issue
 func numericIssueLink(baseURL, class string, index int, marker string) string {
-	return link(util.URLJoin(baseURL, strconv.Itoa(index)), class, fmt.Sprintf("%s%d", marker, index))
+	return link(strings.TrimSuffix(baseURL, "/")+"/"+strconv.Itoa(index), class, fmt.Sprintf("%s%d", marker, index))
 }
 
 // link an HTML link
@@ -38,7 +39,7 @@ func link(href, class, contents string) string {
 }
 
 var numericMetas = map[string]string{
-	"format":                       "https://someurl.com/{user}/{repo}/{index}",
+	"externalTrackerLinkFormat":    "https://someurl.com/{user}/{repo}/{index}",
 	"user":                         "someUser",
 	"repo":                         "someRepo",
 	"style":                        IssueNameStyleNumeric,
@@ -46,7 +47,7 @@ var numericMetas = map[string]string{
 }
 
 var alphanumericMetas = map[string]string{
-	"format":                       "https://someurl.com/{user}/{repo}/{index}",
+	"externalTrackerLinkFormat":    "https://someurl.com/{user}/{repo}/{index}",
 	"user":                         "someUser",
 	"repo":                         "someRepo",
 	"style":                        IssueNameStyleAlphanumeric,
@@ -54,10 +55,10 @@ var alphanumericMetas = map[string]string{
 }
 
 var regexpMetas = map[string]string{
-	"format": "https://someurl.com/{user}/{repo}/{index}",
-	"user":   "someUser",
-	"repo":   "someRepo",
-	"style":  IssueNameStyleRegexp,
+	"externalTrackerLinkFormat": "https://someurl.com/{user}/{repo}/{index}",
+	"user":                      "someUser",
+	"repo":                      "someRepo",
+	"style":                     IssueNameStyleRegexp,
 }
 
 // these values should match the TestOrgRepo const above
@@ -84,7 +85,6 @@ func TestRender_IssueIndexPattern(t *testing.T) {
 	test("#abcd")
 	test("test#1234")
 	test("#1234test")
-	test("#abcd")
 	test("test!1234")
 	test("!1234test")
 	test(" test !1234test")
@@ -116,7 +116,7 @@ func TestRender_IssueIndexPattern2(t *testing.T) {
 
 		links := make([]any, len(indices))
 		for i, index := range indices {
-			links[i] = numericIssueLink(util.URLJoin("/test-owner/test-repo", path), "ref-issue", index, marker)
+			links[i] = numericIssueLink("/test-owner/test-repo/"+path, "ref-issue", index, marker)
 		}
 		expectedNil := fmt.Sprintf(expectedFmt, links...)
 		testRenderIssueIndexPattern(t, s, expectedNil, NewTestRenderContext(TestAppURL, localMetas))
@@ -157,6 +157,11 @@ func TestRender_IssueIndexPattern2(t *testing.T) {
 	// should render with :
 	test("#1234: test", "%s: test", "#", 1234)
 	test("wow (#54321: test)", "wow (%s: test)", "#", 54321)
+
+	// should render next to non-ASCII characters
+	test("修复#1。见（#2）", "修复%s。见（%s）", "#", 1, 2)
+	test("「#3」と“#4”、#5～#6🎉", "「%s」と“%s”、%s～%s🎉", "#", 3, 4, 5, 6)
+	test("见 #7修复，#8", "见 #7修复，%s", "#", 8)
 }
 
 func TestRender_IssueIndexPattern3(t *testing.T) {
@@ -210,7 +215,7 @@ func TestRender_IssueIndexPattern5(t *testing.T) {
 		metas["regexp"] = pattern
 		links := make([]any, len(ids))
 		for i, id := range ids {
-			links[i] = link(util.URLJoin("https://someurl.com/someUser/someRepo/", id), "ref-issue ref-external-issue", names[i])
+			links[i] = link("https://someurl.com/someUser/someRepo/"+id, "ref-issue ref-external-issue", names[i])
 		}
 
 		expected := fmt.Sprintf(expectedFmt, links...)
@@ -218,21 +223,27 @@ func TestRender_IssueIndexPattern5(t *testing.T) {
 	}
 
 	test("abc ISSUE-123 def", "abc %s def",
-		"ISSUE-(\\d+)",
+		`ISSUE-(\d+)`,
 		[]string{"123"},
 		[]string{"ISSUE-123"},
 	)
 
 	test("abc (ISSUE 123) def", "abc %s def",
-		"\\(ISSUE (\\d+)\\)",
+		`\(ISSUE (\d+)\)`,
 		[]string{"123"},
 		[]string{"(ISSUE 123)"},
 	)
 
 	test("abc ISSUE-123 def", "abc %s def",
-		"(ISSUE-(\\d+))",
+		`(ISSUE-(\d+))`,
 		[]string{"ISSUE-123"},
 		[]string{"ISSUE-123"},
+	)
+
+	test("123456: TEST-123456", "%s %s",
+		`(\d+):|TEST-(\d+)`,
+		[]string{"123456", "123456"},
+		[]string{"123456:", "TEST-123456"},
 	)
 
 	testRenderIssueIndexPattern(t, "will not match", "will not match", NewTestRenderContext(regexpMetas))
@@ -250,19 +261,9 @@ func TestRender_IssueIndexPattern_NoShortPattern(t *testing.T) {
 	testRenderIssueIndexPattern(t, "#1", "#1", NewTestRenderContext(metas))
 	testRenderIssueIndexPattern(t, "#1312", "#1312", NewTestRenderContext(metas))
 	testRenderIssueIndexPattern(t, "!1", "!1", NewTestRenderContext(metas))
-}
 
-func TestRender_PostProcessIssueTitle(t *testing.T) {
-	setting.AppURL = TestAppURL
-	metas := map[string]string{
-		"format": "https://someurl.com/{user}/{repo}/{index}",
-		"user":   "someUser",
-		"repo":   "someRepo",
-		"style":  IssueNameStyleNumeric,
-	}
-	actual, err := PostProcessIssueTitle(NewTestRenderContext(metas), "#1")
-	assert.NoError(t, err)
-	assert.Equal(t, "#1", actual)
+	actual := PostProcessIssueTitle(NewTestRenderContext(metas), "#1")
+	assert.Equal(t, template.HTML("#1"), actual)
 }
 
 func testRenderIssueIndexPattern(t *testing.T, input, expected string, ctx *RenderContext) {
@@ -280,37 +281,33 @@ func TestRender_AutoLink(t *testing.T) {
 		err := PostProcessDefault(NewTestRenderContext(localMetas), strings.NewReader(input), &buffer)
 		assert.NoError(t, err)
 		assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(buffer.String()))
-
-		buffer.Reset()
-		err = PostProcessDefault(NewTestRenderContext(localMetas), strings.NewReader(input), &buffer)
-		assert.NoError(t, err)
-		assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(buffer.String()))
 	}
 
 	// render valid issue URLs
-	test(util.URLJoin(TestRepoURL, "issues", "3333"),
-		numericIssueLink(util.URLJoin(TestRepoURL, "issues"), "ref-issue", 3333, "#"))
+	test(TestRepoURL+"issues/3333",
+		numericIssueLink(TestRepoURL+"issues", "ref-issue", 3333, "#"))
 
 	// render valid commit URLs
-	tmp := util.URLJoin(TestRepoURL, "commit", "d8a994ef243349f321568f9e36d5c3f444b99cae")
+	tmp := TestRepoURL + "commit/d8a994ef243349f321568f9e36d5c3f444b99cae"
 	test(tmp, "<a href=\""+tmp+"\" class=\"commit\"><code>d8a994ef24</code></a>")
 	tmp += "#diff-2"
-	test(tmp, "<a href=\""+tmp+"\" class=\"commit\"><code>d8a994ef24 (diff-2)</code></a>")
+	test(tmp, "<a href=\""+tmp+"\" class=\"commit\"><code>d8a994ef24</code>#diff-2</a>")
 
 	// render other commit URLs
 	tmp = "https://external-link.gitea.io/go-gitea/gitea/commit/d8a994ef243349f321568f9e36d5c3f444b99cae#diff-2"
-	test(tmp, "<a href=\""+tmp+"\" class=\"commit\"><code>d8a994ef24 (diff-2)</code></a>")
+	test(tmp, "<a href=\""+tmp+"\">"+tmp+"</a>")
 }
 
 func TestRender_FullIssueURLs(t *testing.T) {
 	setting.AppURL = TestAppURL
 	defer testModule.MockVariableValue(&RenderBehaviorForTesting.DisableAdditionalAttributes, true)()
-	test := func(input, expected string) {
+	testWithMetas := func(metas map[string]string, input, expected string) {
 		var result strings.Builder
-		err := postProcess(NewTestRenderContext(localMetas), []processor{fullIssuePatternProcessor}, strings.NewReader(input), &result)
+		err := postProcess(NewTestRenderContext(metas), []processor{fullIssuePatternProcessor}, strings.NewReader(input), &result)
 		assert.NoError(t, err)
 		assert.Equal(t, expected, result.String())
 	}
+	test := func(input, expected string) { testWithMetas(localMetas, input, expected) }
 	test("Here is a link https://git.osgeo.org/gogs/postgis/postgis/pulls/6",
 		"Here is a link https://git.osgeo.org/gogs/postgis/postgis/pulls/6")
 	test("Look here http://localhost:3000/person/repo/issues/4",
@@ -321,12 +318,21 @@ func TestRender_FullIssueURLs(t *testing.T) {
 		`<a href="http://localhost:3000/test-owner/test-repo/issues/4" class="ref-issue">#4</a>`)
 	test("http://localhost:3000/test-owner/test-repo/issues/4 test",
 		`<a href="http://localhost:3000/test-owner/test-repo/issues/4" class="ref-issue">#4</a> test`)
-	test("http://localhost:3000/test-owner/test-repo/issues/4?a=1&b=2#comment-123 test",
-		`<a href="http://localhost:3000/test-owner/test-repo/issues/4?a=1&amp;b=2#comment-123" class="ref-issue">#4 (comment)</a> test`)
+	test("http://localhost:3000/test-owner/test-repo/issues/4?a=1&b=2/3#comment-123 test",
+		`<a href="http://localhost:3000/test-owner/test-repo/issues/4?a=1&amp;b=2/3#comment-123" class="ref-issue">#4 (comment)</a> test`)
 	test("http://localhost:3000/testOrg/testOrgRepo/pulls/2/files#issuecomment-24",
 		"http://localhost:3000/testOrg/testOrgRepo/pulls/2/files#issuecomment-24")
 	test("http://localhost:3000/testOrg/testOrgRepo/pulls/2/files",
 		"http://localhost:3000/testOrg/testOrgRepo/pulls/2/files")
+	test("http://localhost:3000/test-owner/test-repo/pulls/4",
+		`<a href="http://localhost:3000/test-owner/test-repo/pulls/4" class="ref-issue">#4</a>`)
+
+	testWithMetas(numericMetas, "Reviewed-on: http://localhost:3000/someUser/someRepo/pulls/4",
+		`Reviewed-on: <a href="http://localhost:3000/someUser/someRepo/pulls/4" class="ref-issue">!4</a>`)
+	testWithMetas(numericMetas, "http://localhost:3000/someUser/someRepo/issues/4",
+		`<a href="http://localhost:3000/someUser/someRepo/issues/4" class="ref-issue">#4</a>`)
+	testWithMetas(numericMetas, "http://localhost:3000/person/repo/pulls/4",
+		`<a href="http://localhost:3000/person/repo/pulls/4" class="ref-issue">person/repo#4</a>`)
 }
 
 func TestRegExp_sha1CurrentPattern(t *testing.T) {
@@ -351,65 +357,6 @@ func TestRegExp_sha1CurrentPattern(t *testing.T) {
 	}
 	for _, testCase := range falseTestCases {
 		assert.False(t, globalVars().hashCurrentPattern.MatchString(testCase))
-	}
-}
-
-func TestRegExp_anySHA1Pattern(t *testing.T) {
-	testCases := map[string]anyHashPatternResult{
-		"https://github.com/jquery/jquery/blob/a644101ed04d0beacea864ce805e0c4f86ba1cd1/test/unit/event.js#L2703": {
-			CommitID:  "a644101ed04d0beacea864ce805e0c4f86ba1cd1",
-			SubPath:   "/test/unit/event.js",
-			QueryHash: "L2703",
-		},
-		"https://github.com/jquery/jquery/blob/a644101ed04d0beacea864ce805e0c4f86ba1cd1/test/unit/event.js": {
-			CommitID: "a644101ed04d0beacea864ce805e0c4f86ba1cd1",
-			SubPath:  "/test/unit/event.js",
-		},
-		"https://github.com/jquery/jquery/commit/0705be475092aede1eddae01319ec931fb9c65fc": {
-			CommitID: "0705be475092aede1eddae01319ec931fb9c65fc",
-		},
-		"https://github.com/jquery/jquery/tree/0705be475092aede1eddae01319ec931fb9c65fc/src": {
-			CommitID: "0705be475092aede1eddae01319ec931fb9c65fc",
-			SubPath:  "/src",
-		},
-		"https://try.gogs.io/gogs/gogs/commit/d8a994ef243349f321568f9e36d5c3f444b99cae#diff-2": {
-			CommitID:  "d8a994ef243349f321568f9e36d5c3f444b99cae",
-			QueryHash: "diff-2",
-		},
-		"non-url": {},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678?a=b#L1-L2": {
-			CommitID:  "1234567812345678123456781234567812345678123456781234567812345678",
-			QueryHash: "L1-L2",
-		},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678.": {
-			CommitID: "1234567812345678123456781234567812345678123456781234567812345678",
-		},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678/sub.": {
-			CommitID: "1234567812345678123456781234567812345678123456781234567812345678",
-			SubPath:  "/sub",
-		},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678?a=b.": {
-			CommitID: "1234567812345678123456781234567812345678123456781234567812345678",
-		},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678?a=b&c=d": {
-			CommitID: "1234567812345678123456781234567812345678123456781234567812345678",
-		},
-		"http://a/b/c/d/e/1234567812345678123456781234567812345678123456781234567812345678#hash.": {
-			CommitID:  "1234567812345678123456781234567812345678123456781234567812345678",
-			QueryHash: "hash",
-		},
-	}
-
-	for k, v := range testCases {
-		ret, ok := anyHashPatternExtract(k)
-		if v.CommitID == "" {
-			assert.False(t, ok)
-		} else {
-			assert.Equal(t, strings.TrimSuffix(k, "."), ret.FullURL)
-			assert.Equal(t, v.CommitID, ret.CommitID)
-			assert.Equal(t, v.SubPath, ret.SubPath)
-			assert.Equal(t, v.QueryHash, ret.QueryHash)
-		}
 	}
 }
 

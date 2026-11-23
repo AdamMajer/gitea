@@ -13,24 +13,26 @@ import (
 	"testing"
 	"time"
 
-	auth_model "code.gitea.io/gitea/models/auth"
-	issues_model "code.gitea.io/gitea/models/issues"
-	"code.gitea.io/gitea/models/perm"
-	repo_model "code.gitea.io/gitea/models/repo"
-	unit_model "code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/services/convert"
-	"code.gitea.io/gitea/services/forms"
-	"code.gitea.io/gitea/services/gitdiff"
-	issue_service "code.gitea.io/gitea/services/issue"
-	pull_service "code.gitea.io/gitea/services/pull"
-	repo_service "code.gitea.io/gitea/services/repository"
-	files_service "code.gitea.io/gitea/services/repository/files"
-	"code.gitea.io/gitea/tests"
+	auth_model "gitea.dev/models/auth"
+	issues_model "gitea.dev/models/issues"
+	"gitea.dev/models/perm"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	unit_model "gitea.dev/models/unit"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/convert"
+	"gitea.dev/services/forms"
+	"gitea.dev/services/gitdiff"
+	issue_service "gitea.dev/services/issue"
+	pull_service "gitea.dev/services/pull"
+	repo_service "gitea.dev/services/repository"
+	files_service "gitea.dev/services/repository/files"
+	"gitea.dev/tests"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,8 +49,7 @@ func TestAPIViewPulls(t *testing.T) {
 		AddTokenAuth(ctx.Token)
 	resp := ctx.Session.MakeRequest(t, req, http.StatusOK)
 
-	var pulls []*api.PullRequest
-	DecodeJSON(t, resp, &pulls)
+	pulls := DecodeJSON(t, resp, []*api.PullRequest{})
 	expectedLen := unittest.GetCount(t, &issues_model.Issue{RepoID: repo.ID}, unittest.Cond("is_pull = ?", true))
 	assert.Len(t, pulls, expectedLen)
 
@@ -64,7 +65,7 @@ func TestAPIViewPulls(t *testing.T) {
 		resp = ctx.Session.MakeRequest(t, NewRequest(t, "GET", pull.DiffURL), http.StatusOK)
 		bs, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
-		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs), "")
+		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs))
 		assert.NoError(t, err)
 		if assert.Len(t, patch.Files, 1) {
 			assert.Equal(t, "File-WoW", patch.Files[0].Name)
@@ -101,7 +102,7 @@ func TestAPIViewPulls(t *testing.T) {
 		resp = ctx.Session.MakeRequest(t, NewRequest(t, "GET", pull.DiffURL), http.StatusOK)
 		bs, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
-		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs), "")
+		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs))
 		assert.NoError(t, err)
 		if assert.Len(t, patch.Files, 1) {
 			assert.Equal(t, "README.md", patch.Files[0].Name)
@@ -134,7 +135,7 @@ func TestAPIViewPulls(t *testing.T) {
 		resp = ctx.Session.MakeRequest(t, NewRequest(t, "GET", pull.DiffURL), http.StatusOK)
 		bs, err := io.ReadAll(resp.Body)
 		assert.NoError(t, err)
-		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs), "")
+		patch, err := gitdiff.ParsePatch(t.Context(), 1000, 5000, 10, bytes.NewReader(bs))
 		assert.NoError(t, err)
 		assert.Len(t, patch.Files, 1)
 
@@ -143,27 +144,80 @@ func TestAPIViewPulls(t *testing.T) {
 				assert.Len(t, files, 1)
 			}))
 	}
-}
 
-func TestAPIViewPullsByBaseHead(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
+	t.Run("DefaultState", func(t *testing.T) {
+		writeToken := getTokenForLoggedInUser(t, ctx.Session, auth_model.AccessTokenScopeWriteRepository)
+		req := NewRequestWithJSON(t, http.MethodPatch, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/3", owner.Name, repo.Name), &api.EditPullRequestOption{
+			State: new(string(api.StateClosed)),
+		}).AddTokenAuth(writeToken)
+		MakeRequest(t, req, http.StatusCreated)
 
-	ctx := NewAPITestContext(t, "user2", repo.Name, auth_model.AccessTokenScopeReadRepository)
+		for query, want := range map[string][]int64{
+			"":             {2, 5},
+			"state=closed": {3},
+			"state=all":    {2, 3, 5},
+		} {
+			req := NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls?%s", owner.Name, repo.Name, query).AddTokenAuth(ctx.Token)
+			listed := DecodeJSON(t, ctx.Session.MakeRequest(t, req, http.StatusOK), []*api.PullRequest{})
+			indexes := make([]int64, 0, len(listed))
+			for _, pr := range listed {
+				indexes = append(indexes, pr.Index)
+			}
+			assert.ElementsMatch(t, want, indexes, query)
+		}
+	})
 
-	req := NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls/master/branch2", owner.Name, repo.Name).
-		AddTokenAuth(ctx.Token)
-	resp := ctx.Session.MakeRequest(t, req, http.StatusOK)
+	t.Run("APIViewPullsByBaseHead", func(t *testing.T) {
+		req := NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls/master/branch2", owner.Name, repo.Name).
+			AddTokenAuth(ctx.Token)
+		resp := ctx.Session.MakeRequest(t, req, http.StatusOK)
 
-	pull := &api.PullRequest{}
-	DecodeJSON(t, resp, pull)
-	assert.EqualValues(t, 3, pull.Index)
-	assert.EqualValues(t, 2, pull.ID)
+		pull := DecodeJSON(t, resp, &api.PullRequest{})
+		assert.EqualValues(t, 3, pull.Index)
+		assert.EqualValues(t, 2, pull.ID)
 
-	req = NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls/master/branch-not-exist", owner.Name, repo.Name).
-		AddTokenAuth(ctx.Token)
-	ctx.Session.MakeRequest(t, req, http.StatusNotFound)
+		req = NewRequestf(t, "GET", "/api/v1/repos/%s/%s/pulls/master/branch-not-exist", owner.Name, repo.Name).
+			AddTokenAuth(ctx.Token)
+		ctx.Session.MakeRequest(t, req, http.StatusNotFound)
+	})
+
+	t.Run("APICommitPullRequest", func(t *testing.T) {
+		mergedCommitSHA := "1a8823cd1a9549fde083f992f6b9b87a7ab74fb3"
+		req := NewRequestf(t, "GET", "/api/v1/repos/%s/%s/commits/%s/pull", owner.Name, repo.Name, mergedCommitSHA).AddTokenAuth(ctx.Token)
+		ctx.Session.MakeRequest(t, req, http.StatusOK)
+
+		invalidCommitSHA := "abcd1234abcd1234abcd1234abcd1234abcd1234"
+		req = NewRequestf(t, "GET", "/api/v1/repos/%s/%s/commits/%s/pull", owner.Name, repo.Name, invalidCommitSHA).AddTokenAuth(ctx.Token)
+		ctx.Session.MakeRequest(t, req, http.StatusNotFound)
+	})
+
+	t.Run("HeadRepoHiddenWhenInaccessible", func(t *testing.T) {
+		session := loginUser(t, "user31")
+		forkToken := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/forks", &api.CreateForkOption{}).AddTokenAuth(forkToken), http.StatusAccepted)
+		visible := DecodeJSON(t, MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/pulls", &api.CreatePullRequestOption{
+			Head: "user31:branch2", Base: "master", Title: "pull from a private user's fork",
+		}).AddTokenAuth(forkToken), http.StatusCreated), &api.PullRequest{})
+		require.NotNil(t, visible.Head.Repository)
+		require.NotEmpty(t, visible.Head.Sha)
+
+		prURL := fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d", visible.Index)
+		var listed []*api.PullRequest
+		DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/user2/repo1/pulls?poster=user31"), http.StatusOK), &listed)
+		require.Len(t, listed, 1)
+		for _, hidden := range []*api.PullRequest{
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", prURL), http.StatusOK), &api.PullRequest{}),
+			listed[0],
+		} {
+			assert.Nil(t, hidden.Head.Repository)
+			assert.EqualValues(t, -1, hidden.Head.RepoID)
+			assert.Equal(t, visible.Head.Name, hidden.Head.Name)
+			assert.Equal(t, visible.Head.Sha, hidden.Head.Sha)
+		}
+
+		pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: 1, Index: visible.Index})
+		assert.NotNil(t, convert.ToPayloadPullRequest(t.Context(), pr, nil).Head.Repository)
+	})
 }
 
 // TestAPIMergePullWIP ensures that we can't merge a WIP pull request
@@ -217,45 +271,47 @@ func TestAPIMergePull(t *testing.T) {
 		t.Run("Normal", func(t *testing.T) {
 			newBranch := "test-pull-1"
 			prDTO := createTestBranchPR(t, newBranch)
-			performMerge(t, prDTO.Index, map[string]any{"do": "merge"})
+			performMerge(t, prDTO.Index, map[string]any{"do": "merge", "delete_branch_after_merge": false})
 			checkBranchExists(t, newBranch, http.StatusOK)
 			// try to merge again, make sure we cannot perform a merge on the same PR
 			performMerge(t, prDTO.Index, map[string]any{"do": "merge"}, http.StatusMethodNotAllowed)
 		})
 
-		t.Run("DeleteBranchAfterMergePassedByFormField", func(t *testing.T) {
+		t.Run("DeleteBranchAfterMergeByDefault", func(t *testing.T) {
 			newBranch := "test-pull-2"
 			prDTO := createTestBranchPR(t, newBranch)
-			performMerge(t, prDTO.Index, map[string]any{"do": "merge", "delete_branch_after_merge": true})
+			performMerge(t, prDTO.Index, map[string]any{"do": "merge"})
 			checkBranchExists(t, newBranch, http.StatusNotFound)
 		})
 
-		updateRepoUnitDefaultDeleteBranchAfterMerge := func(t *testing.T, repo *repo_model.Repository, value bool) {
+		t.Run("DeleteBranchAfterMergeDisabledByRepoSettings", func(t *testing.T) {
 			prUnit, err := repo.GetUnit(t.Context(), unit_model.TypePullRequests)
 			require.NoError(t, err)
-
-			prUnit.PullRequestsConfig().DefaultDeleteBranchAfterMerge = value
+			prUnit.PullRequestsConfig().DefaultDeleteBranchAfterMerge = false
 			require.NoError(t, repo_service.UpdateRepositoryUnits(t.Context(), repo, []repo_model.RepoUnit{{
 				RepoID: repo.ID,
 				Type:   unit_model.TypePullRequests,
 				Config: prUnit.PullRequestsConfig(),
 			}}, nil))
-		}
 
-		t.Run("DeleteBranchAfterMergePassedByRepoSettings", func(t *testing.T) {
-			newBranch := "test-pull-3"
-			prDTO := createTestBranchPR(t, newBranch)
-			updateRepoUnitDefaultDeleteBranchAfterMerge(t, repo, true)
-			performMerge(t, prDTO.Index, map[string]any{"do": "merge"})
-			checkBranchExists(t, newBranch, http.StatusNotFound)
+			keptPR := createTestBranchPR(t, "test-pull-3")
+			performMerge(t, keptPR.Index, map[string]any{"do": "merge"})
+			checkBranchExists(t, "test-pull-3", http.StatusOK)
+
+			deletedPR := createTestBranchPR(t, "test-pull-4")
+			performMerge(t, deletedPR.Index, map[string]any{"do": "merge", "delete_branch_after_merge": true})
+			checkBranchExists(t, "test-pull-4", http.StatusNotFound)
 		})
 
-		t.Run("DeleteBranchAfterMergeFormFieldIsSetButNotRepoSettings", func(t *testing.T) {
-			newBranch := "test-pull-4"
-			prDTO := createTestBranchPR(t, newBranch)
-			updateRepoUnitDefaultDeleteBranchAfterMerge(t, repo, false)
-			performMerge(t, prDTO.Index, map[string]any{"do": "merge", "delete_branch_after_merge": true})
-			checkBranchExists(t, newBranch, http.StatusNotFound)
+		t.Run("SquashMergePreservesFormMessage", func(t *testing.T) {
+			req := NewRequestWithValues(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/merge", owner.Name, repo.Name, createTestBranchPR(t, "squash-form-message").Index), map[string]string{
+				"do":                  "squash",
+				"merge_message_field": "custom squash message",
+			}).AddTokenAuth(apiCtx.Token)
+			MakeRequest(t, req, http.StatusOK)
+
+			req = NewRequestf(t, http.MethodGet, "/api/v1/repos/%s/%s/git/commits/%s", owner.Name, repo.Name, repo.DefaultBranch).AddTokenAuth(apiCtx.Token)
+			assert.Contains(t, DecodeJSON(t, MakeRequest(t, req, http.StatusOK), &api.Commit{}).RepoCommit.Message, "\n\ncustom squash message")
 		})
 	})
 }
@@ -279,10 +335,10 @@ func TestAPICreatePullSuccess(t *testing.T) {
 	}).AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusCreated)
 
-	// Also test that AllowMaintainerEdit is false by default
+	// Also test that AllowMaintainerEdit is true by default, the "false" case is covered by TestAPICreatePullBasePermission
 	prIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{Title: prTitle})
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{IssueID: prIssue.ID})
-	assert.False(t, pr.AllowMaintainerEdit)
+	assert.True(t, pr.AllowMaintainerEdit)
 
 	MakeRequest(t, req, http.StatusUnprocessableEntity) // second request should fail
 }
@@ -304,23 +360,32 @@ func TestAPICreatePullBasePermission(t *testing.T) {
 		Base:  "master",
 		Title: prTitle,
 
-		AllowMaintainerEdit: util.ToPointer(true),
+		AllowMaintainerEdit: new(false),
 	}
-	req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &opts).AddTokenAuth(token)
-	MakeRequest(t, req, http.StatusForbidden)
-
-	// add user4 to be a collaborator to base repo
 	ctx := NewAPITestContext(t, repo10.OwnerName, repo10.Name, auth_model.AccessTokenScopeWriteRepository)
-	t.Run("AddUser4AsCollaborator", doAPIAddCollaborator(ctx, user4.Name, perm.AccessModeRead))
+	t.Run("Base non-collaborator without head write access is forbidden", func(t *testing.T) {
+		req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &opts).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusForbidden)
+	})
 
-	// create again
-	req = NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &opts).AddTokenAuth(token)
-	MakeRequest(t, req, http.StatusCreated)
+	t.Run("Base read collaborator without head write access is forbidden", func(t *testing.T) {
+		doAPIAddCollaborator(ctx, user4.Name, perm.AccessModeRead)(t)
+		req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &opts).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusForbidden)
+	})
 
-	// Also test that AllowMaintainerEdit is set to true
-	prIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{Title: prTitle})
-	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{IssueID: prIssue.ID})
-	assert.True(t, pr.AllowMaintainerEdit)
+	t.Run("Base read collaborator with head write access can create pull request", func(t *testing.T) {
+		doAPIAddCollaborator(ctx, user4.Name, perm.AccessModeRead)(t)
+		headCtx := NewAPITestContext(t, repo11.OwnerName, repo11.Name, auth_model.AccessTokenScopeWriteRepository)
+		doAPIAddCollaborator(headCtx, user4.Name, perm.AccessModeWrite)(t)
+		req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &opts).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusCreated)
+
+		// Also test that AllowMaintainerEdit is set to false, the default "true" case is covered by TestAPICreatePullSuccess
+		prIssue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{Title: prTitle})
+		pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{IssueID: prIssue.ID})
+		assert.False(t, pr.AllowMaintainerEdit)
+	})
 }
 
 func TestAPICreatePullHeadPermission(t *testing.T) {
@@ -395,10 +460,8 @@ func TestAPICreatePullWithFieldsSuccess(t *testing.T) {
 
 	req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), opts).
 		AddTokenAuth(token)
-
-	res := MakeRequest(t, req, http.StatusCreated)
-	pull := new(api.PullRequest)
-	DecodeJSON(t, res, pull)
+	resp := MakeRequest(t, req, http.StatusCreated)
+	pull := DecodeJSON(t, resp, &api.PullRequest{})
 
 	assert.NotNil(t, pull.Milestone)
 	assert.Equal(t, opts.Milestone, pull.Milestone.ID)
@@ -453,14 +516,15 @@ func TestAPIEditPull(t *testing.T) {
 	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
 	title := "create a success pr"
 	req := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/pulls", owner10.Name, repo10.Name), &api.CreatePullRequestOption{
-		Head:  "develop",
-		Base:  "master",
-		Title: title,
+		Head:     "develop",
+		Base:     "master",
+		Title:    title,
+		Deadline: optional.Some(new("2026-05-11T12:00:00-10:00")),
 	}).AddTokenAuth(token)
-	apiPull := new(api.PullRequest)
 	resp := MakeRequest(t, req, http.StatusCreated)
-	DecodeJSON(t, resp, apiPull)
+	apiPull := DecodeJSON(t, resp, &api.PullRequest{})
 	assert.Equal(t, "master", apiPull.Base.Name)
+	assert.Equal(t, time.Date(2026, 5, 11, 23, 59, 59, 0, setting.DefaultUILocation).Unix(), apiPull.Deadline.Unix())
 
 	newTitle := "edit a this pr"
 	newBody := "edited body"
@@ -470,8 +534,9 @@ func TestAPIEditPull(t *testing.T) {
 		Body:  &newBody,
 	}).AddTokenAuth(token)
 	resp = MakeRequest(t, req, http.StatusCreated)
-	DecodeJSON(t, resp, apiPull)
+	apiPull = DecodeJSON(t, resp, &api.PullRequest{})
 	assert.Equal(t, "feature/1", apiPull.Base.Name)
+
 	// check comment history
 	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: apiPull.ID})
 	err := pull.LoadIssue(t.Context())
@@ -483,6 +548,77 @@ func TestAPIEditPull(t *testing.T) {
 		Base: "not-exist",
 	}).AddTokenAuth(token)
 	MakeRequest(t, req, http.StatusNotFound)
+
+	req = NewRequestWithJSON(t, http.MethodPatch, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d", owner10.Name, repo10.Name, pull.Index), map[string]any{"due_date": "2000-01-02"}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusCreated)
+	issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: pull.IssueID})
+	assert.NotZero(t, issue.DeadlineUnix)
+
+	req = NewRequestWithJSON(t, http.MethodPatch, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d", owner10.Name, repo10.Name, pull.Index), map[string]any{}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusCreated)
+	issue = unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: pull.IssueID})
+	assert.NotZero(t, issue.DeadlineUnix)
+
+	req = NewRequestWithJSON(t, http.MethodPatch, fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d", owner10.Name, repo10.Name, pull.Index), map[string]any{"due_date": nil}).AddTokenAuth(token)
+	MakeRequest(t, req, http.StatusCreated)
+	issue = unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: pull.IssueID})
+	assert.Zero(t, issue.DeadlineUnix)
+
+	t.Run("PullContentVersion", func(t *testing.T) {
+		testAPIPullContentVersion(t, pull.ID)
+	})
+}
+
+func testAPIPullContentVersion(t *testing.T, pullID int64) {
+	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: pullID})
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: pull.BaseRepoID})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
+
+	session := loginUser(t, owner.Name)
+	token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+	urlStr := fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d", owner.Name, repo.Name, pull.Index)
+
+	t.Run("ResponseIncludesContentVersion", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		req := NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+		apiPull := DecodeJSON(t, resp, &api.PullRequest{})
+		assert.GreaterOrEqual(t, apiPull.ContentVersion, 0)
+	})
+
+	t.Run("EditWithCorrectVersion", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+
+		req := NewRequest(t, "GET", urlStr).AddTokenAuth(token)
+		resp := MakeRequest(t, req, http.StatusOK)
+		before := DecodeJSON(t, resp, &api.PullRequest{})
+		req = NewRequestWithJSON(t, "PATCH", urlStr, api.EditPullRequestOption{
+			Body:           new("updated body with correct version"),
+			ContentVersion: new(before.ContentVersion),
+		}).AddTokenAuth(token)
+		resp = MakeRequest(t, req, http.StatusCreated)
+		after := DecodeJSON(t, resp, &api.PullRequest{})
+		assert.Equal(t, "updated body with correct version", after.Body)
+		assert.Greater(t, after.ContentVersion, before.ContentVersion)
+	})
+
+	t.Run("EditWithWrongVersion", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		req := NewRequestWithJSON(t, "PATCH", urlStr, api.EditPullRequestOption{
+			Body:           new("should fail"),
+			ContentVersion: new(99999),
+		}).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusConflict)
+	})
+
+	t.Run("EditWithoutVersion", func(t *testing.T) {
+		defer tests.PrintCurrentTest(t)()
+		req := NewRequestWithJSON(t, "PATCH", urlStr, api.EditPullRequestOption{
+			Body: new("edit without version succeeds"),
+		}).AddTokenAuth(token)
+		MakeRequest(t, req, http.StatusCreated)
+	})
 }
 
 func doAPIGetPullFiles(ctx APITestContext, pr *api.PullRequest, callback func(*testing.T, []*api.ChangedFile)) func(*testing.T) {
@@ -494,29 +630,12 @@ func doAPIGetPullFiles(ctx APITestContext, pr *api.PullRequest, callback func(*t
 		}
 		resp := ctx.Session.MakeRequest(t, req, ctx.ExpectedCode)
 
-		files := make([]*api.ChangedFile, 0, 1)
-		DecodeJSON(t, resp, &files)
+		files := DecodeJSON(t, resp, []*api.ChangedFile{})
 
 		if callback != nil {
 			callback(t, files)
 		}
 	}
-}
-
-func TestAPICommitPullRequest(t *testing.T) {
-	defer tests.PrepareTestEnv(t)()
-	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
-
-	ctx := NewAPITestContext(t, "user2", repo.Name, auth_model.AccessTokenScopeReadRepository)
-
-	mergedCommitSHA := "1a8823cd1a9549fde083f992f6b9b87a7ab74fb3"
-	req := NewRequestf(t, "GET", "/api/v1/repos/%s/%s/commits/%s/pull", owner.Name, repo.Name, mergedCommitSHA).AddTokenAuth(ctx.Token)
-	ctx.Session.MakeRequest(t, req, http.StatusOK)
-
-	invalidCommitSHA := "abcd1234abcd1234abcd1234abcd1234abcd1234"
-	req = NewRequestf(t, "GET", "/api/v1/repos/%s/%s/commits/%s/pull", owner.Name, repo.Name, invalidCommitSHA).AddTokenAuth(ctx.Token)
-	ctx.Session.MakeRequest(t, req, http.StatusNotFound)
 }
 
 func TestAPIViewPullFilesWithHeadRepoDeleted(t *testing.T) {
@@ -577,7 +696,9 @@ func TestAPIViewPullFilesWithHeadRepoDeleted(t *testing.T) {
 		}
 
 		prOpts := &pull_service.NewPullRequestOptions{Repo: baseRepo, Issue: pullIssue, PullRequest: pullRequest}
-		err = pull_service.NewPullRequest(t.Context(), prOpts)
+		basePerm, err := access_model.GetDoerRepoPermission(t.Context(), prOpts.Repo, prOpts.Issue.Poster)
+		require.NoError(t, err)
+		err = pull_service.NewPullRequest(t.Context(), basePerm, prOpts)
 		assert.NoError(t, err)
 		pr := convert.ToAPIPullRequest(t.Context(), pullRequest, user1)
 

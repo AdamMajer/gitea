@@ -8,21 +8,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
-	packages_model "code.gitea.io/gitea/models/packages"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	packages_module "code.gitea.io/gitea/modules/packages"
-	swift_module "code.gitea.io/gitea/modules/packages/swift"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/routers/api/packages/helper"
-	"code.gitea.io/gitea/services/context"
-	packages_service "code.gitea.io/gitea/services/packages"
+	packages_model "gitea.dev/models/packages"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	packages_module "gitea.dev/modules/packages"
+	swift_module "gitea.dev/modules/packages/swift"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
+	"gitea.dev/routers/api/packages/helper"
+	"gitea.dev/services/context"
+	packages_service "gitea.dev/services/packages"
 
 	"github.com/hashicorp/go-version"
 )
@@ -34,12 +36,17 @@ const (
 	AcceptZip   = "application/vnd.swift.registry.v1+zip"
 )
 
-var (
+var globalVars = sync.OnceValue(func() (ret struct {
+	scopePattern *regexp.Regexp
+	namePattern  *regexp.Regexp
+},
+) {
 	// https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/Registry.md#361-package-scope
-	scopePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\z`)
+	ret.scopePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9-]{0,38}\z`)
 	// https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/Registry.md#362-package-name
-	namePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9-_]{0,99}\z`)
-)
+	ret.namePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9-_]{0,99}\z`)
+	return ret
+})
 
 type headers struct {
 	Status      int
@@ -145,7 +152,7 @@ func EnumeratePackageVersions(ctx *context.Context) {
 		return pds[i].SemVer.LessThan(pds[j].SemVer)
 	})
 
-	baseURL := fmt.Sprintf("%sapi/packages/%s/swift/%s/%s/", setting.AppURL, ctx.Package.Owner.LowerName, packageScope, packageName)
+	baseURL := fmt.Sprintf("%sapi/packages/%s/swift/%s/%s/", setting.AppURL, url.PathEscape(ctx.Package.Owner.LowerName), url.PathEscape(packageScope), url.PathEscape(packageName))
 
 	releases := make(map[string]Release)
 	for _, pd := range pds {
@@ -156,7 +163,7 @@ func EnumeratePackageVersions(ctx *context.Context) {
 	}
 
 	setResponseHeaders(ctx.Resp, &headers{
-		Link: fmt.Sprintf(`<%s%s>; rel="latest-version"`, baseURL, pds[len(pds)-1].Version.Version),
+		Link: fmt.Sprintf(`<%s%s>; rel="latest-version"`, baseURL, url.PathEscape(pds[len(pds)-1].Version.Version)),
 	})
 
 	ctx.JSON(http.StatusOK, EnumeratePackageVersionsResponse{
@@ -197,7 +204,24 @@ func PackageVersionMetadata(ctx *context.Context) {
 		return
 	}
 
-	metadata := pd.Metadata.(*swift_module.Metadata)
+	metadata := packages_model.DescriptorMetadata[*swift_module.Metadata](pd)
+	repositoryURLs := make([]string, 0, len(pd.VersionProperties))
+	for _, property := range pd.VersionProperties {
+		if property.Name == swift_module.PropertyRepositoryURL {
+			repositoryURLs = append(repositoryURLs, property.Value)
+		}
+	}
+
+	var author *swift_module.Person
+	if metadata.Author.Name != "" || metadata.Author.GivenName != "" || metadata.Author.MiddleName != "" || metadata.Author.FamilyName != "" {
+		author = &swift_module.Person{
+			Type:       "Person",
+			Name:       metadata.Author.Name,
+			GivenName:  metadata.Author.GivenName,
+			MiddleName: metadata.Author.MiddleName,
+			FamilyName: metadata.Author.FamilyName,
+		}
+	}
 
 	setResponseHeaders(ctx.Resp, &headers{})
 
@@ -220,18 +244,14 @@ func PackageVersionMetadata(ctx *context.Context) {
 			Keywords:       metadata.Keywords,
 			CodeRepository: metadata.RepositoryURL,
 			License:        metadata.License,
+			LicenseURL:     metadata.LicenseURL,
+			Author:         author,
 			ProgrammingLanguage: swift_module.ProgrammingLanguage{
 				Type: "ComputerLanguage",
 				Name: "Swift",
 				URL:  "https://swift.org",
 			},
-			Author: swift_module.Person{
-				Type:       "Person",
-				Name:       metadata.Author.String(),
-				GivenName:  metadata.Author.GivenName,
-				MiddleName: metadata.Author.MiddleName,
-				FamilyName: metadata.Author.FamilyName,
-			},
+			RepositoryURLs: repositoryURLs,
 		},
 	})
 }
@@ -265,7 +285,7 @@ func DownloadManifest(ctx *context.Context) {
 			swiftVersion = swift_module.TrimmedVersionString(v)
 		}
 	}
-	m, ok := pd.Metadata.(*swift_module.Metadata).Manifests[swiftVersion]
+	m, ok := packages_model.DescriptorMetadata[*swift_module.Metadata](pd).Manifests[swiftVersion]
 	if !ok {
 		setResponseHeaders(ctx.Resp, &headers{
 			Status:   http.StatusSeeOther,
@@ -281,7 +301,7 @@ func DownloadManifest(ctx *context.Context) {
 		filename = fmt.Sprintf("Package@swift-%s.swift", swiftVersion)
 	}
 
-	ctx.ServeContent(strings.NewReader(m.Content), &context.ServeHeaderOptions{
+	ctx.ServeContent(strings.NewReader(m.Content), context.ServeHeaderOptions{
 		ContentType:  "text/x-swift",
 		Filename:     filename,
 		LastModified: pv.CreatedUnix.AsLocalTime(),
@@ -300,7 +320,7 @@ func formFileOptionalReadCloser(ctx *context.Context, formKey string) (io.ReadCl
 
 	content := ctx.Req.FormValue(formKey)
 	if content == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // return nil to indicate that the content does not exist
 	}
 	return io.NopCloser(strings.NewReader(content)), nil
 }
@@ -309,15 +329,14 @@ func formFileOptionalReadCloser(ctx *context.Context, formKey string) (io.ReadCl
 func UploadPackageFile(ctx *context.Context) {
 	packageScope := ctx.PathParam("scope")
 	packageName := ctx.PathParam("name")
+	packageVersion := ctx.PathParam("version")
 
-	v, err := version.NewVersion(ctx.PathParam("version"))
+	_, err := version.NewSemver(packageVersion)
 
-	if !scopePattern.MatchString(packageScope) || !namePattern.MatchString(packageName) || err != nil {
+	if err != nil || !globalVars().scopePattern.MatchString(packageScope) || !globalVars().namePattern.MatchString(packageName) {
 		apiError(ctx, http.StatusBadRequest, err)
 		return
 	}
-
-	packageVersion := v.Core().String()
 
 	file, err := formFileOptionalReadCloser(ctx, "source-archive")
 	if file == nil || err != nil {
@@ -437,7 +456,7 @@ func DownloadPackageFile(ctx *context.Context) {
 		Digest: pd.Files[0].Blob.HashSHA256,
 	})
 
-	helper.ServePackageFile(ctx, s, u, pf, &context.ServeHeaderOptions{
+	helper.ServePackageFile(ctx, s, u, pf, context.ServeHeaderOptions{
 		Filename:     pf.Name,
 		ContentType:  "application/zip",
 		LastModified: pf.CreatedUnix.AsLocalTime(),

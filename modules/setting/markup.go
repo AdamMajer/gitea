@@ -6,10 +6,9 @@ package setting
 import (
 	"regexp"
 	"strings"
-	"sync"
 
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/util"
 )
 
 // ExternalMarkupRenderers represents the external markup renderers
@@ -50,7 +49,8 @@ var Markdown = struct {
 	MathCodeBlockDetection []string
 	MathCodeBlockOptions   MarkdownMathCodeBlockOptions `ini:"-"`
 }{
-	EnableMath: true,
+	EnableMath:       true,
+	FileNamePatterns: []string{"*.md"},
 }
 
 // MarkupRenderer defines the external parser configured in ini
@@ -221,14 +221,10 @@ func createMarkupSanitizerRule(name string, sec ConfigSection) (MarkupSanitizerR
 	return rule, true
 }
 
-var extensionReg = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`^(\.[-\w]+)+$`)
-})
-
 func fileExtensionsToPatterns(sectionName string, extensions []string) []string {
 	patterns := make([]string, 0, len(extensions))
 	for _, extension := range extensions {
-		if !extensionReg().MatchString(extension) {
+		if !globalVars().extensionReg.MatchString(extension) {
 			log.Warn("Config section %s file extension %s is invalid. Extension ignored", sectionName, extension)
 		} else {
 			patterns = append(patterns, "*"+extension)
@@ -236,6 +232,10 @@ func fileExtensionsToPatterns(sectionName string, extensions []string) []string 
 	}
 	return patterns
 }
+
+// MarkupRenderDefaultSandbox only contains a safe set of "sandbox allow" values, it is used to protect users from XSS attack,
+// DO NOT USE "allow-same-origin" by default: if there is XSS in rendered content, same-origin makes the frame page can access parent window and send requests with user's credentials.
+const MarkupRenderDefaultSandbox = "allow-scripts allow-forms allow-modals allow-popups allow-downloads"
 
 func newMarkupRenderer(name string, sec ConfigSection) {
 	if !sec.Key("ENABLED").MustBool(false) {
@@ -269,9 +269,7 @@ func newMarkupRenderer(name string, sec ConfigSection) {
 		renderContentMode = RenderContentModeSanitized
 	}
 
-	// ATTENTION! at the moment, only a safe set like "allow-scripts" are allowed for sandbox mode.
-	// "allow-same-origin" should NEVER be used, it leads to XSS attack: makes the JS in iframe can access parent window's config and send requests with user's credentials.
-	renderContentSandbox := sec.Key("RENDER_CONTENT_SANDBOX").MustString("allow-scripts allow-popups")
+	renderContentSandbox := sec.Key("RENDER_CONTENT_SANDBOX").MustString(MarkupRenderDefaultSandbox)
 	if renderContentSandbox == "disabled" {
 		renderContentSandbox = ""
 	}

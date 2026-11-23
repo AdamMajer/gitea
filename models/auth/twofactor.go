@@ -12,15 +12,19 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/secret"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/cache"
+	"gitea.dev/modules/globallock"
+	"gitea.dev/modules/secret"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/pbkdf2"
+	"xorm.io/builder"
 )
 
 //
@@ -47,6 +51,11 @@ func (err ErrTwoFactorNotEnrolled) Unwrap() error {
 	return util.ErrNotExist
 }
 
+const (
+	totpMaxAttempts = 5
+	totpAttemptsTTL = 15 * 60 // seconds, renewed by every failed attempt
+)
+
 // TwoFactor represents a two-factor authentication token.
 type TwoFactor struct {
 	ID               int64 `xorm:"pk autoincr"`
@@ -65,14 +74,11 @@ func init() {
 
 // GenerateScratchToken recreates the scratch token the user is using.
 func (t *TwoFactor) GenerateScratchToken() (string, error) {
-	tokenBytes, err := util.CryptoRandomBytes(6)
-	if err != nil {
-		return "", err
-	}
+	tokenBytes := util.CryptoRandomBytes(6)
 	// these chars are specially chosen, avoid ambiguous chars like `0`, `O`, `1`, `I`.
 	const base32Chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	token := base32.NewEncoding(base32Chars).WithPadding(base32.NoPadding).EncodeToString(tokenBytes)
-	t.ScratchSalt, _ = util.CryptoRandomString(10)
+	t.ScratchSalt = util.CryptoRandomString(10)
 	t.ScratchHash = HashToken(token, t.ScratchSalt)
 	return token, nil
 }
@@ -107,18 +113,74 @@ func (t *TwoFactor) SetSecret(secretString string) error {
 	return nil
 }
 
-// ValidateTOTP validates the provided passcode.
-func (t *TwoFactor) ValidateTOTP(passcode string) (bool, error) {
+// validateTOTP validates the provided passcode. It does not consume the passcode; all login
+// surfaces must go through ValidateAndConsumeTOTP so that a passcode cannot be redeemed twice.
+func (t *TwoFactor) validateTOTP(passcode string) (bool, error) {
 	decodedStoredSecret, err := base64.StdEncoding.DecodeString(t.Secret)
 	if err != nil {
-		return false, fmt.Errorf("ValidateTOTP invalid base64: %w", err)
+		return false, fmt.Errorf("validateTOTP invalid base64: %w", err)
 	}
 	secretBytes, err := secret.AesDecrypt(t.getEncryptionKey(), decodedStoredSecret)
 	if err != nil {
-		return false, fmt.Errorf("ValidateTOTP unable to decrypt (maybe SECRET_KEY is wrong): %w", err)
+		return false, fmt.Errorf("validateTOTP unable to decrypt (maybe SECRET_KEY is wrong): %w", err)
 	}
 	secretStr := string(secretBytes)
 	return totp.Validate(passcode, secretStr), nil
+}
+
+type TwoFactorResult int
+
+const (
+	TwoFactorResultValid TwoFactorResult = iota + 1
+	TwoFactorResultInvalid
+	TwoFactorResultTooManyAttempts
+)
+
+// ValidateAndConsumeTOTP validates the passcode and atomically records it as used so that the
+// same passcode cannot be redeemed more than once (RFC 6238 §5.2). Invalid passcodes and replays
+// return TwoFactorResultInvalid; exhausted attempts return TwoFactorResultTooManyAttempts.
+// All TOTP login surfaces must go through this helper.
+func (t *TwoFactor) ValidateAndConsumeTOTP(ctx context.Context, passcode string) (result TwoFactorResult, err error) {
+	if passcode == "" {
+		// password-only Basic auth clients must not use up the attempts
+		return TwoFactorResultInvalid, nil
+	}
+	// the lock spans check, validation and counting so that concurrent requests cannot exceed the limit
+	attemptsKey := fmt.Sprintf("twofa_attempts_%d", t.UID)
+	err = globallock.LockAndDo(ctx, attemptsKey, func(ctx context.Context) error {
+		value, _ := cache.GetCache().Get(attemptsKey)
+		attempts, _ := strconv.Atoi(value)
+		if attempts >= totpMaxAttempts {
+			result = TwoFactorResultTooManyAttempts
+			return nil
+		}
+
+		valid, err := t.validateTOTP(passcode)
+		if err != nil {
+			return err
+		}
+		if valid {
+			// Conditional update: only a row whose stored passcode differs from this one is updated, so a
+			// replay (or a concurrent duplicate) matches zero rows and is rejected. The row lock taken by
+			// the UPDATE serializes racing requests, closing the read-validate-write TOCTOU window.
+			t.LastUsedPasscode = passcode
+			n, err := db.GetEngine(ctx).ID(t.ID).
+				Where(builder.Or(builder.IsNull{"last_used_passcode"}, builder.Neq{"last_used_passcode": passcode})).
+				Cols("last_used_passcode").Update(t)
+			if err != nil {
+				return err
+			}
+			valid = n == 1
+		}
+		if !valid {
+			result = TwoFactorResultInvalid
+			return cache.GetCache().Put(attemptsKey, strconv.Itoa(attempts+1), totpAttemptsTTL)
+		}
+		cache.Remove(attemptsKey)
+		result = TwoFactorResultValid
+		return nil
+	})
+	return result, err
 }
 
 // NewTwoFactor creates a new two-factor authentication token.
@@ -173,4 +235,19 @@ func HasTwoFactorOrWebAuthn(ctx context.Context, id int64) (bool, error) {
 		return true, nil
 	}
 	return HasWebAuthnRegistrationsByUID(ctx, id)
+}
+
+// DisableTwoFactor removes every two-factor method of the given user atomically,
+// returning the number of TOTP records and WebAuthn credentials removed.
+// It is a no-op for a user that has no 2FA enrolled.
+func DisableTwoFactor(ctx context.Context, uid int64) (totp, webAuthn int64, err error) {
+	err = db.WithTx(ctx, func(ctx context.Context) error {
+		var e error
+		if totp, e = db.GetEngine(ctx).Where("uid = ?", uid).Delete(&TwoFactor{}); e != nil {
+			return e
+		}
+		webAuthn, e = db.GetEngine(ctx).Where("user_id = ?", uid).Delete(&WebAuthnCredential{})
+		return e
+	})
+	return totp, webAuthn, err
 }

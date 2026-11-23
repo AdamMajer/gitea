@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/timeutil"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/timeutil"
 
 	"github.com/go-enry/go-enry/v2"
 )
@@ -151,7 +151,7 @@ func UpdateLanguageStats(ctx context.Context, repo *Repository, commitID string,
 		var topLang string
 		var s int64
 		for lang, size := range stats {
-			if size > s {
+			if size > s || (size == s && lang < topLang) {
 				s = size
 				topLang = lang
 			}

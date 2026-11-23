@@ -6,7 +6,7 @@ package asymkey
 import (
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
+	"gitea.dev/models/unittest"
 )
 
 func TestMain(m *testing.M) {
@@ -19,5 +19,6 @@ func TestMain(m *testing.M) {
 			"user.yml",
 			"email_address.yml",
 		},
+		SkipRepoFixtures: true,
 	})
 }

@@ -13,16 +13,17 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
-	webhook_model "code.gitea.io/gitea/models/webhook"
-	"code.gitea.io/gitea/modules/base"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/util"
-	webhook_module "code.gitea.io/gitea/modules/webhook"
+	webhook_model "gitea.dev/models/webhook"
+	"gitea.dev/modules/base"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/util"
+	webhook_module "gitea.dev/modules/webhook"
 )
 
 func init() {
@@ -174,11 +175,11 @@ func (m matrixConvertor) Push(p *api.PushPayload) (MatrixPayload, error) {
 	repoLink := htmlLinkFormatter(p.Repo.HTMLURL, p.Repo.FullName)
 	branchLink := MatrixLinkToRef(p.Repo.HTMLURL, p.Ref)
 	var text strings.Builder
-	text.WriteString(fmt.Sprintf("[%s] %s pushed %s to %s:<br>", repoLink, p.Pusher.UserName, commitDesc, branchLink))
+	fmt.Fprintf(&text, "[%s] %s pushed %s to %s:<br>", repoLink, p.Pusher.UserName, commitDesc, branchLink)
 
 	// for each commit, generate a new line text
 	for i, commit := range p.Commits {
-		text.WriteString(fmt.Sprintf("%s: %s - %s", htmlLinkFormatter(commit.URL, commit.ID[:7]), commit.Message, commit.Author.Name))
+		fmt.Fprintf(&text, "%s: %s - %s", htmlLinkFormatter(commit.URL, commit.ID[:7]), commit.Message, commit.Author.Name)
 		// add linebreak to each commit but the last
 		if i < len(p.Commits)-1 {
 			text.WriteString("<br>")
@@ -227,6 +228,8 @@ func (m matrixConvertor) Repository(p *api.RepositoryPayload) (MatrixPayload, er
 		text = fmt.Sprintf("[%s] Repository created by %s", repoLink, senderLink)
 	case api.HookRepoDeleted:
 		text = fmt.Sprintf("[%s] Repository deleted by %s", repoLink, senderLink)
+	case api.HookRepoRenamed, api.HookRepoTransferred:
+		text = fmt.Sprintf("[%s] Repository %s from %s by %s", repoLink, p.Action, getRepoChangedFrom(p), senderLink)
 	}
 	return m.newPayload(text)
 }
@@ -265,10 +268,12 @@ func (m matrixConvertor) WorkflowJob(p *api.WorkflowJobPayload) (MatrixPayload, 
 	return m.newPayload(text)
 }
 
-var urlRegex = regexp.MustCompile(`<a [^>]*?href="([^">]*?)">(.*?)</a>`)
+var urlRegex = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`<a [^>]*?href="([^">]*?)">(.*?)</a>`)
+})
 
 func getMessageBody(htmlText string) string {
-	htmlText = urlRegex.ReplaceAllString(htmlText, "[$2]($1)")
+	htmlText = urlRegex().ReplaceAllString(htmlText, "[$2]($1)")
 	htmlText = strings.ReplaceAll(htmlText, "<br>", "\n")
 	return htmlText
 }

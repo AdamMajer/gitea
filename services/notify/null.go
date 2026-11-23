@@ -6,14 +6,15 @@ package notify
 import (
 	"context"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	git_model "code.gitea.io/gitea/models/git"
-	issues_model "code.gitea.io/gitea/models/issues"
-	packages_model "code.gitea.io/gitea/models/packages"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/repository"
+	actions_model "gitea.dev/models/actions"
+	git_model "gitea.dev/models/git"
+	issues_model "gitea.dev/models/issues"
+	packages_model "gitea.dev/models/packages"
+	project_model "gitea.dev/models/project"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/repository"
 )
 
 // NullNotifier implements a blank notifier
@@ -63,11 +64,11 @@ func (*NullNotifier) AutoMergePullRequest(ctx context.Context, doer *user_model.
 }
 
 // PullRequestSynchronized places a place holder function
-func (*NullNotifier) PullRequestSynchronized(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest) {
+func (*NullNotifier) PullRequestSynchronized(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, before, after string) {
 }
 
 // PullRequestChangeTargetBranch places a place holder function
-func (*NullNotifier) PullRequestChangeTargetBranch(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, oldBranch string) {
+func (*NullNotifier) PullRequestChangeTargetBranch(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, oldBranch, oldSHA string) {
 }
 
 // PullRequestPushCommits notifies when push commits to pull request's head branch
@@ -99,11 +100,11 @@ func (*NullNotifier) DeleteWikiPage(ctx context.Context, doer *user_model.User, 
 }
 
 // NewRelease places a place holder function
-func (*NullNotifier) NewRelease(ctx context.Context, rel *repo_model.Release) {
+func (*NullNotifier) NewRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release) {
 }
 
 // UpdateRelease places a place holder function
-func (*NullNotifier) UpdateRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release) {
+func (*NullNotifier) UpdateRelease(ctx context.Context, doer *user_model.User, rel, oldRelease *repo_model.Release) {
 }
 
 // DeleteRelease places a place holder function
@@ -143,12 +144,14 @@ func (*NullNotifier) IssueChangeLabels(ctx context.Context, doer *user_model.Use
 	addedLabels, removedLabels []*issues_model.Label) {
 }
 
-// CreateRepository places a place holder function
-func (*NullNotifier) CreateRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository) {
+func (*NullNotifier) IssueChangeProjects(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, addedProjectIDs, removedProjectIDs []int64) {
 }
 
-// AdoptRepository places a place holder function
-func (*NullNotifier) AdoptRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository) {
+func (*NullNotifier) IssueChangeProjectColumn(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, oldColumnID int64, newColumn *project_model.Column) {
+}
+
+// CreateRepository places a place holder function
+func (*NullNotifier) CreateRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository) {
 }
 
 // DeleteRepository places a place holder function
@@ -180,7 +183,7 @@ func (*NullNotifier) RenameRepository(ctx context.Context, doer *user_model.User
 }
 
 // TransferRepository places a place holder function
-func (*NullNotifier) TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+func (*NullNotifier) TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwner *user_model.User) {
 }
 
 // SyncPushCommits places a place holder function
@@ -218,4 +221,10 @@ func (*NullNotifier) WorkflowRunStatusUpdate(ctx context.Context, repo *repo_mod
 }
 
 func (*NullNotifier) WorkflowJobStatusUpdate(ctx context.Context, repo *repo_model.Repository, sender *user_model.User, job *actions_model.ActionRunJob, task *actions_model.ActionTask) {
+}
+
+func (*NullNotifier) NotificationCountChange(_ context.Context, _ int64) {
+}
+
+func (*NullNotifier) StopwatchChanged(_ context.Context, _ *user_model.User) {
 }

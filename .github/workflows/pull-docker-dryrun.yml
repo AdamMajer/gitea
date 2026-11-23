@@ -7,32 +7,33 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   files-changed:
     uses: ./.github/workflows/files-changed.yml
-    permissions:
-      contents: read
 
   container:
     if: needs.files-changed.outputs.docker == 'true'
-    needs: files-changed
+    needs: [files-changed]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - name: Build regular container image
-        uses: docker/build-push-action@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          cache-image: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build regular image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/riscv64
-          push: false
-      - name: Build rootless container image
-        uses: docker/build-push-action@v6
+          cache-from: type=registry,ref=ghcr.io/go-gitea/gitea:buildcache-rootful
+      - name: Build rootless image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: false
           platforms: linux/amd64,linux/arm64,linux/riscv64
           file: Dockerfile.rootless
+          cache-from: type=registry,ref=ghcr.io/go-gitea/gitea:buildcache-rootless

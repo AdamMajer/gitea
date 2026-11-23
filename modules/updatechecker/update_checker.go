@@ -5,13 +5,12 @@ package updatechecker
 
 import (
 	"context"
-	"io"
 	"net/http"
 
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/proxy"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/system"
+	"gitea.dev/modules/jsonlimit"
+	"gitea.dev/modules/proxy"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/system"
 
 	"github.com/hashicorp/go-version"
 )
@@ -21,8 +20,7 @@ type CheckerState struct {
 	LatestVersion string
 }
 
-// Name returns the name of the state item for update checker
-func (r *CheckerState) Name() string {
+func (CheckerState) StateName() string {
 	return "update-checker"
 }
 
@@ -43,10 +41,6 @@ func GiteaUpdateChecker(httpEndpoint string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
 
 	type respType struct {
 		Latest struct {
@@ -54,7 +48,7 @@ func GiteaUpdateChecker(httpEndpoint string) error {
 		} `json:"latest"`
 	}
 	respData := respType{}
-	err = json.Unmarshal(body, &respData)
+	err = jsonlimit.DecodeWithLimit(resp.Body, 100*1024, &respData)
 	if err != nil {
 		return err
 	}

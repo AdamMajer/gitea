@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/timeutil"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/timeutil"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
@@ -75,13 +75,17 @@ type FindGPGKeyOptions struct {
 	IncludeSubKeys bool
 }
 
+func (opts FindGPGKeyOptions) ToOrders() string {
+	return "id"
+}
+
 func (opts FindGPGKeyOptions) ToConds() builder.Cond {
 	cond := builder.NewCond()
 	if !opts.IncludeSubKeys {
 		cond = cond.And(builder.Eq{"primary_key_id": ""})
 	}
 
-	if opts.OwnerID > 0 {
+	if opts.OwnerID != 0 {
 		cond = cond.And(builder.Eq{"owner_id": opts.OwnerID})
 	}
 	if opts.KeyID != "" {

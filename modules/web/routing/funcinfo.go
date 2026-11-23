@@ -62,7 +62,6 @@ func GetFuncInfo(fn any, friendlyName ...string) *FuncInfo {
 			info = copyFuncInfo(info)
 			info.shortName = name
 
-			funcInfoNameMap[name] = info
 			funcInfoMapMu.Lock()
 			funcInfoNameMap[name] = info
 			funcInfoMapMu.Unlock()
@@ -130,13 +129,13 @@ func copyFuncInfo(l *FuncInfo) *FuncInfo {
 	}
 }
 
-// shortenFilename generates a short source code filename from a full package path, eg: "code.gitea.io/routers/common/logger_context.go" => "common/logger_context.go"
+// shortenFilename generates a short source code filename from a full package path, eg: "gitea.dev/routers/common/logger_context.go" => "common/logger_context.go"
 func shortenFilename(filename, fallback string) string {
 	if filename == "" {
 		return fallback
 	}
-	if lastIndex := strings.LastIndexByte(filename, '/'); lastIndex >= 0 {
-		if secondLastIndex := strings.LastIndexByte(filename[:lastIndex], '/'); secondLastIndex >= 0 {
+	if dir, _, ok := strings.CutLast(filename, "/"); ok {
+		if secondLastIndex := strings.LastIndexByte(dir, '/'); secondLastIndex >= 0 {
 			return filename[secondLastIndex+1:]
 		}
 	}

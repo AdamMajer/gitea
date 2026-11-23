@@ -8,16 +8,16 @@ import (
 	"strconv"
 	"strings"
 
-	auth_model "code.gitea.io/gitea/models/auth"
-	git_model "code.gitea.io/gitea/models/git"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/json"
-	lfs_module "code.gitea.io/gitea/modules/lfs"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/convert"
+	auth_model "gitea.dev/models/auth"
+	git_model "gitea.dev/models/git"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/jsonlimit"
+	lfs_module "gitea.dev/modules/lfs"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/services/context"
+	"gitea.dev/services/convert"
 )
 
 func handleLockListOut(ctx *context.Context, repo *repo_model.Repository, lock *git_model.LFSLock, err error) {
@@ -59,7 +59,7 @@ func GetListLockHandler(ctx *context.Context) {
 	}
 	repository.MustOwner(ctx)
 
-	context.CheckRepoScopedToken(ctx, repository, auth_model.Read)
+	context.CheckRepoScopedToken(ctx, auth_model.Read)
 	if ctx.Written() {
 		return
 	}
@@ -148,7 +148,7 @@ func PostLockHandler(ctx *context.Context) {
 	}
 	repository.MustOwner(ctx)
 
-	context.CheckRepoScopedToken(ctx, repository, auth_model.Write)
+	context.CheckRepoScopedToken(ctx, auth_model.Write)
 	if ctx.Written() {
 		return
 	}
@@ -165,11 +165,7 @@ func PostLockHandler(ctx *context.Context) {
 	ctx.Resp.Header().Set("Content-Type", lfs_module.MediaType)
 
 	var req api.LFSLockRequest
-	bodyReader := ctx.Req.Body
-	defer bodyReader.Close()
-
-	dec := json.NewDecoder(bodyReader)
-	if err := dec.Decode(&req); err != nil {
+	if err := jsonlimit.DecodeWithLimit(ctx.Req.Body, 100*1024*1024, &req); err != nil {
 		log.Warn("Failed to decode lock request as json. Error: %v", err)
 		writeStatus(ctx, http.StatusBadRequest)
 		return
@@ -213,7 +209,7 @@ func VerifyLockHandler(ctx *context.Context) {
 	}
 	repository.MustOwner(ctx)
 
-	context.CheckRepoScopedToken(ctx, repository, auth_model.Read)
+	context.CheckRepoScopedToken(ctx, auth_model.Read)
 	if ctx.Written() {
 		return
 	}
@@ -281,7 +277,7 @@ func UnLockHandler(ctx *context.Context) {
 	}
 	repository.MustOwner(ctx)
 
-	context.CheckRepoScopedToken(ctx, repository, auth_model.Write)
+	context.CheckRepoScopedToken(ctx, auth_model.Write)
 	if ctx.Written() {
 		return
 	}
@@ -298,11 +294,7 @@ func UnLockHandler(ctx *context.Context) {
 	ctx.Resp.Header().Set("Content-Type", lfs_module.MediaType)
 
 	var req api.LFSLockDeleteRequest
-	bodyReader := ctx.Req.Body
-	defer bodyReader.Close()
-
-	dec := json.NewDecoder(bodyReader)
-	if err := dec.Decode(&req); err != nil {
+	if err := jsonlimit.DecodeWithLimit(ctx.Req.Body, 100*1024*1024, &req); err != nil {
 		log.Warn("Failed to decode lock request as json. Error: %v", err)
 		writeStatus(ctx, http.StatusBadRequest)
 		return

@@ -5,7 +5,6 @@ package markdown
 
 import (
 	"html/template"
-	"strconv"
 
 	"github.com/yuin/goldmark/ast"
 )
@@ -56,36 +55,6 @@ func NewSummary() *Summary {
 	return &Summary{}
 }
 
-// TaskCheckBoxListItem is a block that represents a list item of a markdown block with a checkbox
-type TaskCheckBoxListItem struct {
-	*ast.ListItem
-	IsChecked      bool
-	SourcePosition int
-}
-
-// KindTaskCheckBoxListItem is the NodeKind for TaskCheckBoxListItem
-var KindTaskCheckBoxListItem = ast.NewNodeKind("TaskCheckBoxListItem")
-
-// Dump implements Node.Dump .
-func (n *TaskCheckBoxListItem) Dump(source []byte, level int) {
-	m := map[string]string{}
-	m["IsChecked"] = strconv.FormatBool(n.IsChecked)
-	m["SourcePosition"] = strconv.FormatInt(int64(n.SourcePosition), 10)
-	ast.DumpHelper(n, source, level, m, nil)
-}
-
-// Kind implements Node.Kind.
-func (n *TaskCheckBoxListItem) Kind() ast.NodeKind {
-	return KindTaskCheckBoxListItem
-}
-
-// NewTaskCheckBoxListItem returns a new TaskCheckBoxListItem node.
-func NewTaskCheckBoxListItem(listItem *ast.ListItem) *TaskCheckBoxListItem {
-	return &TaskCheckBoxListItem{
-		ListItem: listItem,
-	}
-}
-
 // Icon is an inline for a Fomantic UI icon
 type Icon struct {
 	ast.BaseInline
@@ -95,13 +64,13 @@ type Icon struct {
 // ColorPreview is an inline for a color preview
 type ColorPreview struct {
 	ast.BaseInline
-	Color []byte
+	Color string
 }
 
 // Dump implements Node.Dump.
 func (n *ColorPreview) Dump(source []byte, level int) {
 	m := map[string]string{}
-	m["Color"] = string(n.Color)
+	m["Color"] = n.Color
 	ast.DumpHelper(n, source, level, m, nil)
 }
 
@@ -114,7 +83,7 @@ func (n *ColorPreview) Kind() ast.NodeKind {
 }
 
 // NewColorPreview returns a new Span node.
-func NewColorPreview(color []byte) *ColorPreview {
+func NewColorPreview(color string) *ColorPreview {
 	return &ColorPreview{
 		BaseInline: ast.BaseInline{},
 		Color:      color,
@@ -169,4 +138,15 @@ func (n *RawHTML) Kind() ast.NodeKind {
 
 func NewRawHTML(rawHTML template.HTML) *RawHTML {
 	return &RawHTML{rawHTML: rawHTML}
+}
+
+func childSingleText(node ast.Node, source []byte) (string, bool) {
+	if node.FirstChild() == nil || node.FirstChild() != node.LastChild() {
+		return "", false
+	}
+	c, ok := node.FirstChild().(*ast.Text)
+	if !ok {
+		return "", false
+	}
+	return string(c.Segment.Value(source)), true
 }

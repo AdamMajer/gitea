@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 
 	"xorm.io/builder"
 )
@@ -22,7 +23,9 @@ func init() {
 	db.RegisterModel(new(RepoTopic))
 }
 
-var topicPattern = regexp.MustCompile(`^[a-z0-9][-.a-z0-9]*$`)
+var topicPattern = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-z0-9][-.a-z0-9]*$`)
+})
 
 // Topic represents a topic of repositories
 type Topic struct {
@@ -44,12 +47,6 @@ type ErrTopicNotExist struct {
 	Name string
 }
 
-// IsErrTopicNotExist checks if an error is an ErrTopicNotExist.
-func IsErrTopicNotExist(err error) bool {
-	_, ok := err.(ErrTopicNotExist)
-	return ok
-}
-
 // Error implements error interface
 func (err ErrTopicNotExist) Error() string {
 	return fmt.Sprintf("topic is not exist [name: %s]", err.Name)
@@ -61,7 +58,7 @@ func (err ErrTopicNotExist) Unwrap() error {
 
 // ValidateTopic checks a topic by length and match pattern rules
 func ValidateTopic(topic string) bool {
-	return len(topic) <= 35 && topicPattern.MatchString(topic)
+	return len(topic) <= 35 && topicPattern().MatchString(topic)
 }
 
 // SanitizeAndValidateTopics sanitizes and checks an array or topics
@@ -257,7 +254,7 @@ func DeleteTopic(ctx context.Context, repoID int64, topicName string) (*Topic, e
 	}
 	if topic == nil {
 		// Repo doesn't have topic, can't be removed
-		return nil, nil
+		return nil, nil //nolint:nilnil // return nil to indicate that the topic does not exist
 	}
 
 	return db.WithTx2(ctx, func(ctx context.Context) (*Topic, error) {

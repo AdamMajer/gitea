@@ -5,17 +5,16 @@ package admin
 
 import (
 	"net/http"
-	"net/url"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	packages_model "code.gitea.io/gitea/models/packages"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/services/context"
-	packages_service "code.gitea.io/gitea/services/packages"
-	packages_cleanup_service "code.gitea.io/gitea/services/packages/cleanup"
+	"gitea.dev/models/db"
+	packages_model "gitea.dev/models/packages"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/services/context"
+	packages_service "gitea.dev/services/packages"
+	packages_cleanup_service "gitea.dev/services/packages/cleanup"
 )
 
 const (
@@ -40,25 +39,25 @@ func Packages(ctx *context.Context) {
 		},
 	})
 	if err != nil {
-		ctx.ServerError("SearchVersions", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	pds, err := packages_model.GetPackageDescriptors(ctx, pvs)
 	if err != nil {
-		ctx.ServerError("GetPackageDescriptors", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	totalBlobSize, err := packages_model.GetTotalBlobSize(ctx)
 	if err != nil {
-		ctx.ServerError("GetTotalBlobSize", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	totalUnreferencedBlobSize, err := packages_model.GetTotalUnreferencedBlobSize(ctx)
 	if err != nil {
-		ctx.ServerError("CalculateBlobSize", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -73,8 +72,7 @@ func Packages(ctx *context.Context) {
 	ctx.Data["TotalBlobSize"] = totalBlobSize - totalUnreferencedBlobSize
 	ctx.Data["TotalUnreferencedBlobSize"] = totalUnreferencedBlobSize
 
-	pager := context.NewPagination(int(total), setting.UI.PackagesPagingNum, page, 5)
-	pager.AddParamFromRequest(ctx.Req)
+	pager := context.NewPagerBuilder(ctx).TotalCount(total).PerPageLimit(setting.UI.PackagesPagingNum).CurPage(page).Build()
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, tplPackagesList)
@@ -84,22 +82,22 @@ func Packages(ctx *context.Context) {
 func DeletePackageVersion(ctx *context.Context) {
 	pv, err := packages_model.GetVersionByID(ctx, ctx.FormInt64("id"))
 	if err != nil {
-		ctx.ServerError("GetRepositoryByID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := packages_service.RemovePackageVersion(ctx, ctx.Doer, pv); err != nil {
-		ctx.ServerError("RemovePackageVersion", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
-	ctx.Flash.Success(ctx.Tr("packages.settings.delete.success"))
-	ctx.JSONRedirect(setting.AppSubURL + "/-/admin/packages?page=" + url.QueryEscape(ctx.FormString("page")) + "&q=" + url.QueryEscape(ctx.FormString("q")) + "&type=" + url.QueryEscape(ctx.FormString("type")))
+	ctx.Flash.Success(ctx.Tr("packages.settings.delete.version.success"))
+	ctx.JSONRedirect("")
 }
 
 func CleanupExpiredData(ctx *context.Context) {
 	if err := packages_cleanup_service.CleanupExpiredData(ctx, time.Duration(0)); err != nil {
-		ctx.ServerError("CleanupExpiredData", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

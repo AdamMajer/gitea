@@ -9,16 +9,16 @@ import (
 	"path"
 	"strings"
 
-	activities_model "code.gitea.io/gitea/models/activities"
-	issues_model "code.gitea.io/gitea/models/issues"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/repository"
-	"code.gitea.io/gitea/modules/util"
-	notify_service "code.gitea.io/gitea/services/notify"
+	activities_model "gitea.dev/models/activities"
+	issues_model "gitea.dev/models/issues"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/markup/markdown"
+	"gitea.dev/modules/repository"
+	notify_service "gitea.dev/services/notify"
 )
 
 type actionNotifier struct {
@@ -109,15 +109,7 @@ func (a *actionNotifier) CreateIssueComment(ctx context.Context, doer *user_mode
 		IsPrivate: issue.Repo.IsPrivate,
 	}
 
-	truncatedContent, truncatedRight := util.EllipsisDisplayStringX(comment.Content, 200)
-	if truncatedRight != "" {
-		// in case the content is in a Latin family language, we remove the last broken word.
-		lastSpaceIdx := strings.LastIndex(truncatedContent, " ")
-		if lastSpaceIdx != -1 && (len(truncatedContent)-lastSpaceIdx < 15) {
-			truncatedContent = truncatedContent[:lastSpaceIdx] + "…"
-		}
-	}
-	act.Content = fmt.Sprintf("%d|%s", issue.Index, truncatedContent)
+	act.Content = fmt.Sprintf("%d|%s", issue.Index, markdown.FeedExcerpt(ctx, comment.Content))
 
 	if issue.IsPull {
 		act.OpType = activities_model.ActionCommentPull
@@ -172,7 +164,7 @@ func (a *actionNotifier) RenameRepository(ctx context.Context, doer *user_model.
 	}
 }
 
-func (a *actionNotifier) TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string) {
+func (a *actionNotifier) TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwner *user_model.User) {
 	if err := NotifyWatchers(ctx, &activities_model.Action{
 		ActUserID: doer.ID,
 		ActUser:   doer,
@@ -180,7 +172,7 @@ func (a *actionNotifier) TransferRepository(ctx context.Context, doer *user_mode
 		RepoID:    repo.ID,
 		Repo:      repo,
 		IsPrivate: repo.IsPrivate,
-		Content:   path.Join(oldOwnerName, repo.Name),
+		Content:   path.Join(oldOwner.Name, repo.Name),
 	}); err != nil {
 		log.Error("NotifyWatchers: %v", err)
 	}
@@ -229,7 +221,7 @@ func (a *actionNotifier) PullRequestReview(ctx context.Context, pr *issues_model
 				actions = append(actions, &activities_model.Action{
 					ActUserID: review.Reviewer.ID,
 					ActUser:   review.Reviewer,
-					Content:   fmt.Sprintf("%d|%s", review.Issue.Index, strings.Split(comm.Content, "\n")[0]),
+					Content:   fmt.Sprintf("%d|%s", review.Issue.Index, markdown.FeedExcerpt(ctx, comm.Content)),
 					OpType:    activities_model.ActionCommentPull,
 					RepoID:    review.Issue.RepoID,
 					Repo:      review.Issue.Repo,
@@ -245,7 +237,7 @@ func (a *actionNotifier) PullRequestReview(ctx context.Context, pr *issues_model
 		action := &activities_model.Action{
 			ActUserID: review.Reviewer.ID,
 			ActUser:   review.Reviewer,
-			Content:   fmt.Sprintf("%d|%s", review.Issue.Index, strings.Split(comment.Content, "\n")[0]),
+			Content:   fmt.Sprintf("%d|%s", review.Issue.Index, markdown.FeedExcerpt(ctx, comment.Content)),
 			RepoID:    review.Issue.RepoID,
 			Repo:      review.Issue.Repo,
 			IsPrivate: review.Issue.Repo.IsPrivate,
@@ -327,7 +319,7 @@ func (a *actionNotifier) PushCommits(ctx context.Context, pusher *user_model.Use
 
 	opType := activities_model.ActionCommitRepo
 
-	// Check it's tag push or branch.
+	// Check its tag push or branch.
 	if opts.RefFullName.IsTag() {
 		opType = activities_model.ActionPushTag
 		if opts.IsDelRef() {
@@ -337,6 +329,11 @@ func (a *actionNotifier) PushCommits(ctx context.Context, pusher *user_model.Use
 		opType = activities_model.ActionDeleteBranch
 	}
 
+	// HINT: USER-ACTIVITY-PUSH-COMMITS: it's said that the time of push commits (for user activity display) is designed this way,
+	// it doesn't use git commit's time, it only uses the doer's action time.
+	// ref: https://github.com/go-gitea/gitea/pull/36469#issuecomment-3901955347
+	// ref: https://github.com/go-gitea/gitea/issues/14051
+	// ref: https://github.com/go-gitea/gitea/issues/11861#issuecomment-643162143
 	if err = NotifyWatchers(ctx, &activities_model.Action{
 		ActUserID: pusher.ID,
 		ActUser:   pusher,
@@ -456,14 +453,14 @@ func (a *actionNotifier) SyncDeleteRef(ctx context.Context, doer *user_model.Use
 	}
 }
 
-func (a *actionNotifier) NewRelease(ctx context.Context, rel *repo_model.Release) {
-	if err := rel.LoadAttributes(ctx); err != nil {
-		log.Error("LoadAttributes: %v", err)
+func (a *actionNotifier) NewRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release) {
+	if err := rel.LoadRepo(ctx); err != nil {
+		log.Error("LoadRepo: %v", err)
 		return
 	}
 	if err := NotifyWatchers(ctx, &activities_model.Action{
-		ActUserID: rel.PublisherID,
-		ActUser:   rel.Publisher,
+		ActUserID: doer.ID,
+		ActUser:   doer,
 		OpType:    activities_model.ActionPublishRelease,
 		RepoID:    rel.RepoID,
 		Repo:      rel.Repo,

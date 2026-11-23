@@ -9,19 +9,19 @@ import (
 	"runtime/pprof"
 	"time"
 
-	"code.gitea.io/gitea/modules/httplib"
-	"code.gitea.io/gitea/modules/tailmsg"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/modules/httplib"
+	"gitea.dev/modules/tailmsg"
+	"gitea.dev/modules/util"
+	"gitea.dev/services/context"
 )
 
 func MonitorDiagnosis(ctx *context.Context) {
 	seconds := min(max(ctx.FormInt64("seconds"), 1), 300)
 
-	httplib.ServeSetHeaders(ctx.Resp, &httplib.ServeHeaderOptions{
-		ContentType: "application/zip",
-		Disposition: "attachment",
-		Filename:    fmt.Sprintf("gitea-diagnosis-%s.zip", time.Now().Format("20060102-150405")),
+	httplib.ServeSetHeaders(ctx.Resp, httplib.ServeHeaderOptions{
+		ContentType:        "application/zip",
+		Filename:           fmt.Sprintf("gitea-diagnosis-%s.zip", time.Now().Format("20060102-150405")),
+		ContentDisposition: httplib.ContentDispositionAttachment,
 	})
 
 	zipWriter := zip.NewWriter(ctx.Resp)
@@ -29,14 +29,14 @@ func MonitorDiagnosis(ctx *context.Context) {
 
 	f, err := zipWriter.CreateHeader(&zip.FileHeader{Name: "goroutine-before.txt", Method: zip.Deflate, Modified: time.Now()})
 	if err != nil {
-		ctx.ServerError("Failed to create zip file", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	_ = pprof.Lookup("goroutine").WriteTo(f, 1)
 
 	f, err = zipWriter.CreateHeader(&zip.FileHeader{Name: "cpu-profile.dat", Method: zip.Deflate, Modified: time.Now()})
 	if err != nil {
-		ctx.ServerError("Failed to create zip file", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -50,27 +50,27 @@ func MonitorDiagnosis(ctx *context.Context) {
 
 	f, err = zipWriter.CreateHeader(&zip.FileHeader{Name: "goroutine-after.txt", Method: zip.Deflate, Modified: time.Now()})
 	if err != nil {
-		ctx.ServerError("Failed to create zip file", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	_ = pprof.Lookup("goroutine").WriteTo(f, 1)
 
 	f, err = zipWriter.CreateHeader(&zip.FileHeader{Name: "heap.dat", Method: zip.Deflate, Modified: time.Now()})
 	if err != nil {
-		ctx.ServerError("Failed to create zip file", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	_ = pprof.Lookup("heap").WriteTo(f, 0)
 
 	f, err = zipWriter.CreateHeader(&zip.FileHeader{Name: "perftrace.txt", Method: zip.Deflate, Modified: time.Now()})
 	if err != nil {
-		ctx.ServerError("Failed to create zip file", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	for _, record := range tailmsg.GetManager().GetTraceRecorder().GetRecords() {
 		_, _ = f.Write(util.UnsafeStringToBytes(record.Time.Format(time.RFC3339)))
 		_, _ = f.Write([]byte(" "))
-		_, _ = f.Write(util.UnsafeStringToBytes((record.Content)))
+		_, _ = f.Write(util.UnsafeStringToBytes(record.Content))
 		_, _ = f.Write([]byte("\n\n"))
 	}
 }

@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"strconv"
 
-	"code.gitea.io/gitea/models/db"
-	system_model "code.gitea.io/gitea/models/system"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/models/db"
+	system_model "gitea.dev/models/system"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/services/context"
 )
 
 const (
@@ -30,14 +30,14 @@ func Notices(ctx *context.Context) {
 
 	notices, err := system_model.Notices(ctx, page, setting.UI.Admin.NoticePagingNum)
 	if err != nil {
-		ctx.ServerError("Notices", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Data["Notices"] = notices
 
 	ctx.Data["Total"] = total
 
-	ctx.Data["Page"] = context.NewPagination(int(total), setting.UI.Admin.NoticePagingNum, page, 5)
+	ctx.Data["Page"] = context.NewPagerBuilder(ctx).TotalCount(total).PerPageLimit(setting.UI.Admin.NoticePagingNum).CurPage(page).Build()
 
 	ctx.HTML(http.StatusOK, tplNotices)
 }
@@ -65,7 +65,7 @@ func DeleteNotices(ctx *context.Context) {
 // EmptyNotices delete all the notices
 func EmptyNotices(ctx *context.Context) {
 	if err := system_model.DeleteNotices(ctx, 0, 0); err != nil {
-		ctx.ServerError("DeleteNotices", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

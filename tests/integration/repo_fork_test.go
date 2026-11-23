@@ -10,13 +10,14 @@ import (
 	"strconv"
 	"testing"
 
-	org_model "code.gitea.io/gitea/models/organization"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/test"
-	org_service "code.gitea.io/gitea/services/org"
-	"code.gitea.io/gitea/tests"
+	org_model "gitea.dev/models/organization"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/structs"
+	"gitea.dev/modules/test"
+	org_service "gitea.dev/services/org"
+	"gitea.dev/tests"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -80,9 +81,16 @@ func TestRepoForkToOrg(t *testing.T) {
 	assert.False(t, exists, "Forking should not be allowed anymore")
 }
 
+func TestRepoForkIntoSameOrg(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	defer test.MockVariableValue(&setting.Repository.AllowForkIntoSameOwner, true)()
+	session := loginUser(t, "user2")
+	testRepoFork(t, session, "org3", "repo3", "org3", "repo3-fork", "")
+}
+
 func TestForkListLimitedAndPrivateRepos(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	forkItemSelector := ".fork-list .flex-item"
+	forkItemSelector := ".fork-list .item"
 
 	user1Sess := loginUser(t, "user1")
 	user1 := unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "user1"})

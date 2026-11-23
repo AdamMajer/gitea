@@ -6,29 +6,24 @@ package repo
 import (
 	"net/http"
 
-	"code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/services/context"
-	issue_service "code.gitea.io/gitea/services/issue"
+	"gitea.dev/routers/common"
+	"gitea.dev/services/context"
+	issue_service "gitea.dev/services/issue"
 )
 
 // IssueSuggestions returns a list of issue suggestions
 func IssueSuggestions(ctx *context.Context) {
 	keyword := ctx.Req.FormValue("q")
 
-	canReadIssues := ctx.Repo.CanRead(unit.TypeIssues)
-	canReadPulls := ctx.Repo.CanRead(unit.TypePullRequests)
-
-	var isPull optional.Option[bool]
-	if canReadPulls && !canReadIssues {
-		isPull = optional.Some(true)
-	} else if canReadIssues && !canReadPulls {
-		isPull = optional.Some(false)
+	isPull, ok := common.ParseIssueFilterTypeIsPullWithPermission(ctx.Repo.Permission, "")
+	if !ok {
+		ctx.HTTPError(http.StatusForbidden, "no permission to read issues or pulls")
+		return
 	}
 
 	suggestions, err := issue_service.GetSuggestion(ctx, ctx.Repo.Repository, isPull, keyword)
 	if err != nil {
-		ctx.ServerError("GetSuggestion", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

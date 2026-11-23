@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"testing"
 
-	"code.gitea.io/gitea/models/unittest"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/services/contexttest"
-	"code.gitea.io/gitea/services/forms"
+	"gitea.dev/models/unittest"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/contexttest"
+	"gitea.dev/services/forms"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -81,7 +81,7 @@ func TestChangePassword(t *testing.T) {
 		},
 	} {
 		t.Run(req.OldPassword+"__"+req.NewPassword, func(t *testing.T) {
-			unittest.PrepareTestEnv(t)
+			assert.NoError(t, unittest.PrepareTestDatabase())
 			setting.PasswordComplexity = req.PasswordComplexity
 			ctx, _ := contexttest.MockContext(t, "user/settings/security")
 			contexttest.LoadUser(t, ctx, 2)

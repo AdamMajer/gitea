@@ -6,27 +6,27 @@ package notify
 import (
 	"context"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	git_model "code.gitea.io/gitea/models/git"
-	issues_model "code.gitea.io/gitea/models/issues"
-	packages_model "code.gitea.io/gitea/models/packages"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/repository"
+	actions_model "gitea.dev/models/actions"
+	git_model "gitea.dev/models/git"
+	issues_model "gitea.dev/models/issues"
+	packages_model "gitea.dev/models/packages"
+	project_model "gitea.dev/models/project"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/repository"
 )
 
 // Notifier defines an interface to notify receiver
 type Notifier interface {
 	Run()
 
-	AdoptRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository)
 	CreateRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository)
 	MigrateRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository)
 	DeleteRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository)
 	ForkRepository(ctx context.Context, doer *user_model.User, oldRepo, repo *repo_model.Repository)
 	RenameRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldRepoName string)
-	TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwnerName string)
+	TransferRepository(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, oldOwner *user_model.User)
 	RepoPendingTransfer(ctx context.Context, doer, newOwner *user_model.User, repo *repo_model.Repository)
 
 	NewIssue(ctx context.Context, issue *issues_model.Issue, mentions []*user_model.User)
@@ -41,14 +41,16 @@ type Notifier interface {
 	IssueChangeRef(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, oldRef string)
 	IssueChangeLabels(ctx context.Context, doer *user_model.User, issue *issues_model.Issue,
 		addedLabels, removedLabels []*issues_model.Label)
+	IssueChangeProjects(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, addedProjectIDs, removedProjectIDs []int64)
+	IssueChangeProjectColumn(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, oldColumnID int64, newColumn *project_model.Column)
 
 	NewPullRequest(ctx context.Context, pr *issues_model.PullRequest, mentions []*user_model.User)
 	MergePullRequest(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest)
 	AutoMergePullRequest(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest)
-	PullRequestSynchronized(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest)
+	PullRequestSynchronized(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, before, after string)
 	PullRequestReview(ctx context.Context, pr *issues_model.PullRequest, review *issues_model.Review, comment *issues_model.Comment, mentions []*user_model.User)
 	PullRequestCodeComment(ctx context.Context, pr *issues_model.PullRequest, comment *issues_model.Comment, mentions []*user_model.User)
-	PullRequestChangeTargetBranch(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, oldBranch string)
+	PullRequestChangeTargetBranch(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, oldBranch, oldSHA string)
 	PullRequestPushCommits(ctx context.Context, doer *user_model.User, pr *issues_model.PullRequest, comment *issues_model.Comment)
 	PullReviewDismiss(ctx context.Context, doer *user_model.User, review *issues_model.Review, comment *issues_model.Comment)
 
@@ -61,8 +63,8 @@ type Notifier interface {
 	EditWikiPage(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, page, comment string)
 	DeleteWikiPage(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, page string)
 
-	NewRelease(ctx context.Context, rel *repo_model.Release)
-	UpdateRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release)
+	NewRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release)
+	UpdateRelease(ctx context.Context, doer *user_model.User, rel, oldRelease *repo_model.Release)
 	DeleteRelease(ctx context.Context, doer *user_model.User, rel *repo_model.Release)
 
 	PushCommits(ctx context.Context, pusher *user_model.User, repo *repo_model.Repository, opts *repository.PushUpdateOptions, commits *repository.PushCommits)
@@ -82,4 +84,8 @@ type Notifier interface {
 	WorkflowRunStatusUpdate(ctx context.Context, repo *repo_model.Repository, sender *user_model.User, run *actions_model.ActionRun)
 
 	WorkflowJobStatusUpdate(ctx context.Context, repo *repo_model.Repository, sender *user_model.User, job *actions_model.ActionRunJob, task *actions_model.ActionTask)
+
+	NotificationCountChange(ctx context.Context, userID int64)
+
+	StopwatchChanged(ctx context.Context, user *user_model.User)
 }

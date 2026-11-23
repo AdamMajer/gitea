@@ -8,17 +8,15 @@ import (
 	"strconv"
 	"strings"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/git/gitcmd"
-	"code.gitea.io/gitea/modules/gitrepo"
-	"code.gitea.io/gitea/modules/indexer/code/internal"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/git/gitcmd"
+	"gitea.dev/modules/indexer/code/internal"
+	"gitea.dev/modules/log"
 )
 
 func getDefaultBranchSha(ctx context.Context, repo *repo_model.Repository) (string, error) {
-	stdout, _, err := gitrepo.RunCmdString(ctx, repo, gitcmd.NewCommand("show-ref", "-s").AddDynamicArguments(git.BranchPrefix+repo.DefaultBranch))
+	stdout, _, err := gitcmd.NewCommand("show-ref", "-s").AddDynamicArguments(git.BranchPrefix + repo.DefaultBranch).WithRepo(repo).RunStdString(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -26,7 +24,7 @@ func getDefaultBranchSha(ctx context.Context, repo *repo_model.Repository) (stri
 }
 
 // getRepoChanges returns changes to repo since last indexer update
-func getRepoChanges(ctx context.Context, repo *repo_model.Repository, revision string) (*internal.RepoChanges, error) {
+func getRepoChanges(ctx context.Context, repo *repo_model.Repository, gitRepo *git.Repository, revision string) (*internal.RepoChanges, error) {
 	status, err := repo_model.GetIndexerStatus(ctx, repo, repo_model.RepoIndexerTypeCode)
 	if err != nil {
 		return nil, err
@@ -35,36 +33,18 @@ func getRepoChanges(ctx context.Context, repo *repo_model.Repository, revision s
 	needGenesis := len(status.CommitSha) == 0
 	if !needGenesis {
 		hasAncestorCmd := gitcmd.NewCommand("merge-base").AddDynamicArguments(status.CommitSha, revision)
-		stdout, _, _ := gitrepo.RunCmdString(ctx, repo, hasAncestorCmd) // FIXME: error is not handled
+		stdout, _, _ := hasAncestorCmd.WithRepo(repo).RunStdString(ctx) // FIXME: error is not handled
 		needGenesis = len(stdout) == 0
 	}
 
 	if needGenesis {
-		return genesisChanges(ctx, repo, revision)
+		return genesisChanges(ctx, gitRepo, revision)
 	}
-	return nonGenesisChanges(ctx, repo, revision)
-}
-
-func isIndexable(entry *git.TreeEntry) bool {
-	if !entry.IsRegular() && !entry.IsExecutable() {
-		return false
-	}
-	name := strings.ToLower(entry.Name())
-	for _, g := range setting.Indexer.ExcludePatterns {
-		if g.Match(name) {
-			return false
-		}
-	}
-	for _, g := range setting.Indexer.IncludePatterns {
-		if g.Match(name) {
-			return true
-		}
-	}
-	return len(setting.Indexer.IncludePatterns) == 0
+	return nonGenesisChanges(ctx, repo, gitRepo, revision)
 }
 
 // parseGitLsTreeOutput parses the output of a `git ls-tree -r --full-name` command
-func parseGitLsTreeOutput(stdout []byte) ([]internal.FileUpdate, error) {
+func parseGitLsTreeOutput(ctx context.Context, gitRepo *git.Repository, stdout []byte) ([]internal.FileUpdate, error) {
 	entries, err := git.ParseTreeEntries(stdout)
 	if err != nil {
 		return nil, err
@@ -72,12 +52,11 @@ func parseGitLsTreeOutput(stdout []byte) ([]internal.FileUpdate, error) {
 	idxCount := 0
 	updates := make([]internal.FileUpdate, len(entries))
 	for _, entry := range entries {
-		if isIndexable(entry) {
+		if (entry.IsRegular() || entry.IsExecutable()) && internal.IsSearchable(entry.Name(), 0) {
 			updates[idxCount] = internal.FileUpdate{
 				Filename: entry.Name(),
 				BlobSha:  entry.ID.String(),
-				Size:     entry.Size(),
-				Sized:    true,
+				Size:     entry.GetSize(ctx, gitRepo),
 			}
 			idxCount++
 		}
@@ -85,23 +64,26 @@ func parseGitLsTreeOutput(stdout []byte) ([]internal.FileUpdate, error) {
 	return updates[:idxCount], nil
 }
 
-// genesisChanges get changes to add repo to the indexer for the first time
-func genesisChanges(ctx context.Context, repo *repo_model.Repository, revision string) (*internal.RepoChanges, error) {
-	var changes internal.RepoChanges
-	stdout, _, runErr := gitrepo.RunCmdBytes(ctx, repo, gitcmd.NewCommand("ls-tree", "--full-tree", "-l", "-r").AddDynamicArguments(revision))
-	if runErr != nil {
-		return nil, runErr
+func ListFiles(ctx context.Context, gitRepo *git.Repository, revision string, paths ...string) ([]internal.FileUpdate, error) {
+	stdout, _, err := gitcmd.NewCommand("ls-tree", "--full-tree", "-l", "-r").AddDynamicArguments(revision).AddDashesAndList(paths...).WithRepo(gitRepo).RunStdBytes(ctx)
+	if err != nil {
+		return nil, err
 	}
+	return parseGitLsTreeOutput(ctx, gitRepo, stdout)
+}
 
+// genesisChanges get changes to add repo to the indexer for the first time
+func genesisChanges(ctx context.Context, gitRepo *git.Repository, revision string) (*internal.RepoChanges, error) {
+	var changes internal.RepoChanges
 	var err error
-	changes.Updates, err = parseGitLsTreeOutput(stdout)
+	changes.Updates, err = ListFiles(ctx, gitRepo, revision)
 	return &changes, err
 }
 
 // nonGenesisChanges get changes since the previous indexer update
-func nonGenesisChanges(ctx context.Context, repo *repo_model.Repository, revision string) (*internal.RepoChanges, error) {
+func nonGenesisChanges(ctx context.Context, repo *repo_model.Repository, gitRepo *git.Repository, revision string) (*internal.RepoChanges, error) {
 	diffCmd := gitcmd.NewCommand("diff", "--name-status").AddDynamicArguments(repo.CodeIndexerStatus.CommitSha, revision)
-	stdout, _, runErr := gitrepo.RunCmdString(ctx, repo, diffCmd)
+	stdout, _, runErr := diffCmd.WithRepo(repo).RunStdString(ctx)
 	if runErr != nil {
 		// previous commit sha may have been removed by a force push, so
 		// try rebuilding from scratch
@@ -109,7 +91,7 @@ func nonGenesisChanges(ctx context.Context, repo *repo_model.Repository, revisio
 		if err := (*globalIndexer.Load()).Delete(ctx, repo.ID); err != nil {
 			return nil, err
 		}
-		return genesisChanges(ctx, repo, revision)
+		return genesisChanges(ctx, gitRepo, revision)
 	}
 
 	var changes internal.RepoChanges
@@ -119,12 +101,12 @@ func nonGenesisChanges(ctx context.Context, repo *repo_model.Repository, revisio
 	updateChanges := func() error {
 		cmd := gitcmd.NewCommand("ls-tree", "--full-tree", "-l").AddDynamicArguments(revision).
 			AddDashesAndList(updatedFilenames...)
-		lsTreeStdout, _, err := gitrepo.RunCmdBytes(ctx, repo, cmd)
+		lsTreeStdout, _, err := cmd.WithRepo(repo).RunStdBytes(ctx)
 		if err != nil {
 			return err
 		}
 
-		updates, err1 := parseGitLsTreeOutput(lsTreeStdout)
+		updates, err1 := parseGitLsTreeOutput(ctx, gitRepo, lsTreeStdout)
 		if err1 != nil {
 			return err1
 		}

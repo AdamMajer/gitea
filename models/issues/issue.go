@@ -11,20 +11,23 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 
-	"code.gitea.io/gitea/models/db"
-	project_model "code.gitea.io/gitea/models/project"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	project_model "gitea.dev/models/project"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
 
 	"xorm.io/builder"
+	"xorm.io/xorm"
 )
 
 // ErrIssueNotExist represents a "IssueNotExist" kind of error.
@@ -48,54 +51,40 @@ func (err ErrIssueNotExist) Unwrap() error {
 	return util.ErrNotExist
 }
 
-// ErrNewIssueInsert is used when the INSERT statement in newIssue fails
-type ErrNewIssueInsert struct {
-	OriginalError error
-}
-
-// IsErrNewIssueInsert checks if an error is a ErrNewIssueInsert.
-func IsErrNewIssueInsert(err error) bool {
-	_, ok := err.(ErrNewIssueInsert)
-	return ok
-}
-
-func (err ErrNewIssueInsert) Error() string {
-	return err.OriginalError.Error()
-}
-
 var ErrIssueAlreadyChanged = util.NewInvalidArgumentErrorf("the issue is already changed")
 
 // Issue represents an issue or pull request of repository.
 type Issue struct {
 	ID                int64                  `xorm:"pk autoincr"`
-	RepoID            int64                  `xorm:"INDEX UNIQUE(repo_index)"`
+	RepoID            int64                  `xorm:"INDEX(repo_closed_pull) UNIQUE(repo_index)"`
 	Repo              *repo_model.Repository `xorm:"-"`
 	Index             int64                  `xorm:"UNIQUE(repo_index)"` // Index in one repository.
 	PosterID          int64                  `xorm:"INDEX"`
 	Poster            *user_model.User       `xorm:"-"`
 	OriginalAuthor    string
-	OriginalAuthorID  int64                  `xorm:"index"`
-	Title             string                 `xorm:"name"`
-	Content           string                 `xorm:"LONGTEXT"`
-	RenderedContent   template.HTML          `xorm:"-"`
-	ContentVersion    int                    `xorm:"NOT NULL DEFAULT 0"`
-	Labels            []*Label               `xorm:"-"`
-	isLabelsLoaded    bool                   `xorm:"-"`
-	MilestoneID       int64                  `xorm:"INDEX"`
-	Milestone         *Milestone             `xorm:"-"`
-	isMilestoneLoaded bool                   `xorm:"-"`
-	Project           *project_model.Project `xorm:"-"`
+	OriginalAuthorID  int64                    `xorm:"index"`
+	Title             string                   `xorm:"name"`
+	Content           string                   `xorm:"LONGTEXT"`
+	RenderedContent   template.HTML            `xorm:"-"`
+	ContentVersion    int                      `xorm:"NOT NULL DEFAULT 0"`
+	Labels            []*Label                 `xorm:"-"`
+	isLabelsLoaded    bool                     `xorm:"-"`
+	MilestoneID       int64                    `xorm:"INDEX"`
+	Milestone         *Milestone               `xorm:"-"`
+	isMilestoneLoaded bool                     `xorm:"-"`
+	Projects          []*project_model.Project `xorm:"-"`
+	isProjectsLoaded  bool                     `xorm:"-"`
 	Priority          int
 	AssigneeID        int64            `xorm:"-"`
 	Assignee          *user_model.User `xorm:"-"`
 	isAssigneeLoaded  bool             `xorm:"-"`
-	IsClosed          bool             `xorm:"INDEX"`
+	IsClosed          bool             `xorm:"INDEX(repo_closed_pull)"`
 	IsRead            bool             `xorm:"-"`
-	IsPull            bool             `xorm:"INDEX"` // Indicates whether is a pull request or not.
+	IsPull            bool             `xorm:"INDEX(repo_closed_pull)"` // Indicates whether is a pull request or not.
 	PullRequest       *PullRequest     `xorm:"-"`
 	NumComments       int
 
-	// TODO: RemoveIssueRef: see "repo/issue/branch_selector_field.tmpl"
+	// TODO: ISSUE-SIDEBAR-REF-SELECTOR: see "repo/issue/branch_selector_field.tmpl"
 	Ref string
 
 	PinOrder int `xorm:"-"` // 0 means not loaded, -1 means loaded but not pinned
@@ -124,10 +113,15 @@ type Issue struct {
 	TimeEstimate int64 `xorm:"NOT NULL DEFAULT 0"`
 }
 
-var (
-	issueTasksPat     = regexp.MustCompile(`(^\s*[-*]\s\[[\sxX]\]\s.)|(\n\s*[-*]\s\[[\sxX]\]\s.)`)
-	issueTasksDonePat = regexp.MustCompile(`(^\s*[-*]\s\[[xX]\]\s.)|(\n\s*[-*]\s\[[xX]\]\s.)`)
-)
+var globalVars = sync.OnceValue(func() (ret struct {
+	issueTasksPat     *regexp.Regexp
+	issueTasksDonePat *regexp.Regexp
+},
+) {
+	ret.issueTasksPat = regexp.MustCompile(`(^\s*[-*]\s\[[\sxX]\]\s.)|(\n\s*[-*]\s\[[\sxX]\]\s.)`)
+	ret.issueTasksDonePat = regexp.MustCompile(`(^\s*[-*]\s\[[xX]\]\s.)|(\n\s*[-*]\s\[[xX]\]\s.)`)
+	return ret
+})
 
 // IssueIndex represents the issue index table
 type IssueIndex db.ResourceIndex
@@ -135,6 +129,27 @@ type IssueIndex db.ResourceIndex
 func init() {
 	db.RegisterModel(new(Issue))
 	db.RegisterModel(new(IssueIndex))
+}
+
+func sanitizeDatabaseStringContent(s *string) {
+	// postgresql doesn't like "\x00"
+	// this is only a simple workaround for issues like https://github.com/go-gitea/gitea/issues/28890 and https://github.com/go-gitea/gitea/issues/40003
+	*s = strings.ReplaceAll(*s, "\x00", " ")
+}
+
+var (
+	_ xorm.BeforeInsertProcessor = (*Issue)(nil)
+	_ xorm.BeforeUpdateProcessor = (*Issue)(nil)
+)
+
+func (issue *Issue) BeforeInsert() {
+	sanitizeDatabaseStringContent(&issue.Title)
+	sanitizeDatabaseStringContent(&issue.Content)
+}
+
+func (issue *Issue) BeforeUpdate() {
+	sanitizeDatabaseStringContent(&issue.Title)
+	sanitizeDatabaseStringContent(&issue.Content)
 }
 
 // LoadTotalTimes load total tracked time
@@ -190,17 +205,10 @@ func (issue *Issue) IsTimetrackerEnabled(ctx context.Context) bool {
 
 // LoadPoster loads poster
 func (issue *Issue) LoadPoster(ctx context.Context) (err error) {
-	if issue.Poster == nil && issue.PosterID != 0 {
-		issue.Poster, err = user_model.GetPossibleUserByID(ctx, issue.PosterID)
-		if err != nil {
-			issue.PosterID = user_model.GhostUserID
-			issue.Poster = user_model.NewGhostUser()
-			if !user_model.IsErrUserNotExist(err) {
-				return fmt.Errorf("getUserByID.(poster) [%d]: %w", issue.PosterID, err)
-			}
-			return nil
-		}
+	if issue.Poster != nil {
+		return nil
 	}
+	issue.PosterID, issue.Poster, err = user_model.GetPossibleUserByID(ctx, issue.PosterID)
 	return err
 }
 
@@ -246,13 +254,11 @@ func (issue *Issue) loadCommentsByType(ctx context.Context, tp CommentType) (err
 	return err
 }
 
-func (issue *Issue) loadReactions(ctx context.Context) (err error) {
+func (issue *Issue) loadAllReactions(ctx context.Context) (err error) {
 	if issue.Reactions != nil {
 		return nil
 	}
-	reactions, _, err := FindReactions(ctx, FindReactionsOptions{
-		IssueID: issue.ID,
-	})
+	reactions, _, err := FindReactions(ctx, FindReactionsOptions{IssueIDWithComments: issue.ID})
 	if err != nil {
 		return err
 	}
@@ -327,7 +333,7 @@ func (issue *Issue) LoadAttributes(ctx context.Context) (err error) {
 		return err
 	}
 
-	if err = issue.LoadProject(ctx); err != nil {
+	if err = issue.LoadProjects(ctx); err != nil {
 		return err
 	}
 
@@ -361,7 +367,7 @@ func (issue *Issue) LoadAttributes(ctx context.Context) (err error) {
 		}
 	}
 
-	return issue.loadReactions(ctx)
+	return issue.loadAllReactions(ctx)
 }
 
 // IsPinned returns if a Issue is pinned
@@ -377,12 +383,13 @@ func (issue *Issue) ResetAttributesLoaded() {
 	issue.isMilestoneLoaded = false
 	issue.isAttachmentsLoaded = false
 	issue.isAssigneeLoaded = false
+	issue.isProjectsLoaded = false
 }
 
 // GetIsRead load the `IsRead` field of the issue
 func (issue *Issue) GetIsRead(ctx context.Context, userID int64) error {
-	issueUser := &IssueUser{IssueID: issue.ID, UID: userID}
-	if has, err := db.GetEngine(ctx).Get(issueUser); err != nil {
+	issueUser, has, err := db.Get[IssueUser](ctx, builder.Eq{"issue_id": issue.ID, "uid": userID})
+	if err != nil {
 		return err
 	} else if !has {
 		issue.IsRead = false
@@ -462,12 +469,12 @@ func (issue *Issue) IsPoster(uid int64) bool {
 
 // GetTasks returns the amount of tasks in the issues content
 func (issue *Issue) GetTasks() int {
-	return len(issueTasksPat.FindAllStringIndex(issue.Content, -1))
+	return len(globalVars().issueTasksPat.FindAllStringIndex(issue.Content, -1))
 }
 
 // GetTasksDone returns the amount of completed tasks in the issues content
 func (issue *Issue) GetTasksDone() int {
-	return len(issueTasksDonePat.FindAllStringIndex(issue.Content, -1))
+	return len(globalVars().issueTasksDonePat.FindAllStringIndex(issue.Content, -1))
 }
 
 // GetLastEventTimestamp returns the last user visible event timestamp, either the creation of this issue or the close.
@@ -498,7 +505,7 @@ func (issue *Issue) GetLastComment(ctx context.Context) (*Comment, error) {
 		return nil, err
 	}
 	if !exist {
-		return nil, nil
+		return nil, nil //nolint:nilnil // return nil to indicate that the object does not exist
 	}
 	return &c, nil
 }
@@ -519,11 +526,7 @@ func GetIssueByIndex(ctx context.Context, repoID, index int64) (*Issue, error) {
 	if index < 1 {
 		return nil, ErrIssueNotExist{}
 	}
-	issue := &Issue{
-		RepoID: repoID,
-		Index:  index,
-	}
-	has, err := db.GetEngine(ctx).Get(issue)
+	issue, has, err := db.Get[Issue](ctx, builder.Eq{"repo_id": repoID, "`index`": index})
 	if err != nil {
 		return nil, err
 	} else if !has {
@@ -588,6 +591,17 @@ func GetIssueByID(ctx context.Context, id int64) (*Issue, error) {
 		return nil, err
 	} else if !has {
 		return nil, ErrIssueNotExist{id, 0, 0}
+	}
+	return issue, nil
+}
+
+func GetIssueByRepoID(ctx context.Context, repoID, issueID int64) (*Issue, error) {
+	issue := new(Issue)
+	has, err := db.GetEngine(ctx).ID(issueID).Where("repo_id=?", repoID).Get(issue)
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, ErrIssueNotExist{issueID, repoID, 0}
 	}
 	return issue, nil
 }
@@ -691,7 +705,7 @@ func (issue *Issue) BlockedByDependencies(ctx context.Context, opts db.ListOptio
 		// sort by repo id then created date, with the issues of the same repo at the beginning of the list
 		OrderBy("CASE WHEN issue.repo_id = ? THEN 0 ELSE issue.repo_id END, issue.created_unix DESC", issue.RepoID)
 	if opts.Page > 0 {
-		sess = db.SetSessionPagination(sess, &opts)
+		db.SetSessionPagination(sess, &opts)
 	}
 	total, err = sess.FindAndCount(&issueDeps)
 

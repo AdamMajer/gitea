@@ -4,17 +4,18 @@
 package stats
 
 import (
+	"sync"
 	"testing"
 	"time"
 
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unittest"
-	"code.gitea.io/gitea/modules/queue"
-	"code.gitea.io/gitea/modules/setting"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unittest"
+	"gitea.dev/modules/queue"
+	"gitea.dev/modules/setting"
 
-	_ "code.gitea.io/gitea/models"
-	_ "code.gitea.io/gitea/models/actions"
-	_ "code.gitea.io/gitea/models/activities"
+	_ "gitea.dev/models"
+	_ "gitea.dev/models/actions"
+	_ "gitea.dev/models/activities"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -29,7 +30,7 @@ func TestRepoStatsIndex(t *testing.T) {
 
 	setting.LoadQueueSettings()
 
-	err := Init()
+	err := Init(&sync.WaitGroup{})
 	assert.NoError(t, err)
 
 	repo, err := repo_model.GetRepositoryByID(t.Context(), 1)

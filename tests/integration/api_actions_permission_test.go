@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"testing"
 
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/test"
-	"code.gitea.io/gitea/tests"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/test"
+	"gitea.dev/tests"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -20,9 +20,19 @@ func testActionUserSignIn(t *testing.T) {
 		AddTokenAuth("8061e833a55f6fc0157c98b883e91fcfeeb1a71a")
 	resp := MakeRequest(t, req, http.StatusOK)
 
-	var u api.User
-	DecodeJSON(t, resp, &u)
+	u := DecodeJSON(t, resp, &api.User{})
 	assert.Equal(t, "gitea-actions", u.UserName)
+}
+
+func testActionUserOwnsNothing(t *testing.T) {
+	const token = "8061e833a55f6fc0157c98b883e91fcfeeb1a71a"
+	for _, link := range []string{"/api/v1/user/repos", "/api/v1/user/orgs", "/api/v1/user/actions/runs"} {
+		MakeRequest(t, NewRequest(t, "GET", link).AddTokenAuth(token), http.StatusForbidden)
+	}
+	for _, link := range []string{"/api/v1/users/gitea-actions/orgs", "/api/v1/users/gitea-actions/keys"} {
+		assert.JSONEq(t, "[]", MakeRequest(t, NewRequest(t, "GET", link).AddTokenAuth(token), http.StatusOK).Body.String(), link)
+	}
+	assert.NotContains(t, MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/search?uid=-2").AddTokenAuth(token), http.StatusOK).Body.String(), `"private":true`)
 }
 
 func testActionUserAccessPublicRepo(t *testing.T) {
@@ -49,6 +59,7 @@ func TestActionUserAccessPermission(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 
 	t.Run("ActionUserSignIn", testActionUserSignIn)
+	t.Run("ActionUserOwnsNothing", testActionUserOwnsNothing)
 	t.Run("ActionUserAccessPublicRepo", testActionUserAccessPublicRepo)
 	t.Run("ActionUserNoAccessOtherPrivateRepo", testActionUserNoAccessOtherPrivateRepo)
 }

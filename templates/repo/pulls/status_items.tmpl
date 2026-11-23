@@ -1,0 +1,22 @@
+{{/* Template Attributes:
+* CommitStatuses: all commit status elements
+*/}}
+{{$commitActionsStatuses := ctx.ActionsUtils.CommitStatusesToActionsStatuses $.CommitStatuses}}
+{{range $cs := $.CommitStatuses}}
+	<div class="item commit-status-item">
+		<div class="flex-text-block tw-flex-1">
+			{{$actionStatus := $commitActionsStatuses.IconStatus $cs}}
+			{{if $actionStatus}}
+				{{template "repo/icons/action_status" (dict "Status" $actionStatus "Size" 18 "ClassName" "commit-status icon")}}
+			{{else}}
+				{{template "repo/icons/commit_status" $cs}}
+			{{end}}
+			<div class="gt-ellipsis">
+				{{$cs.Context}} <span class="tw-text-text-light-2">{{$cs.Description}}</span>
+			</div>
+		</div>
+		<div class="flex-text-block">
+			{{if $cs.TargetURL}}<a href="{{$cs.TargetURL}}">{{ctx.Locale.Tr "repo.pulls.status_checks_details"}}</a>{{end}}
+		</div>
+	</div>
+{{end}}

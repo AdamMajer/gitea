@@ -8,24 +8,25 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	db_model "code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/modules/graceful"
-	"code.gitea.io/gitea/modules/indexer"
-	"code.gitea.io/gitea/modules/indexer/issues/bleve"
-	"code.gitea.io/gitea/modules/indexer/issues/db"
-	"code.gitea.io/gitea/modules/indexer/issues/elasticsearch"
-	"code.gitea.io/gitea/modules/indexer/issues/internal"
-	"code.gitea.io/gitea/modules/indexer/issues/meilisearch"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/process"
-	"code.gitea.io/gitea/modules/queue"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/util"
+	db_model "gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/modules/graceful"
+	"gitea.dev/modules/indexer"
+	"gitea.dev/modules/indexer/issues/bleve"
+	"gitea.dev/modules/indexer/issues/db"
+	"gitea.dev/modules/indexer/issues/elasticsearch"
+	"gitea.dev/modules/indexer/issues/internal"
+	"gitea.dev/modules/indexer/issues/meilisearch"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/process"
+	"gitea.dev/modules/queue"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/util"
 )
 
 // IndexerMetadata is used to send data to the queue, so it contains only the ids.
@@ -59,9 +60,8 @@ func init() {
 	globalIndexer.Store(dummyIndexer)
 }
 
-// InitIssueIndexer initialize issue indexer, syncReindex is true then reindex until
-// all issue index done.
-func InitIssueIndexer(syncReindex bool) {
+// InitIssueIndexer initialize issue indexer
+func InitIssueIndexer(startup *sync.WaitGroup) {
 	ctx, _, finished := process.GetManager().AddTypedContext(context.Background(), "Service: IssueIndexer", process.SystemProcessType, false)
 
 	indexerInitWaitChannel := make(chan time.Duration, 1)
@@ -72,7 +72,7 @@ func InitIssueIndexer(syncReindex bool) {
 	graceful.GetManager().RunAtTerminate(finished)
 
 	// Create the Indexer
-	go func() {
+	startup.Go(func() {
 		pprof.SetGoroutineLabels(ctx)
 		start := time.Now()
 		log.Info("PID %d: Initializing Issue Indexer: %s", os.Getpid(), setting.Indexer.IssueType)
@@ -127,23 +127,14 @@ func InitIssueIndexer(syncReindex bool) {
 
 		// Populate the index
 		if !existed {
-			if syncReindex {
-				graceful.GetManager().RunWithShutdownContext(populateIssueIndexer)
-			} else {
-				go graceful.GetManager().RunWithShutdownContext(populateIssueIndexer)
-			}
+			startup.Go(func() { graceful.GetManager().RunWithShutdownContext(populateIssueIndexer) })
 		}
 
 		indexerInitWaitChannel <- time.Since(start)
 		close(indexerInitWaitChannel)
-	}()
+	})
 
-	if syncReindex {
-		select {
-		case <-indexerInitWaitChannel:
-		case <-graceful.GetManager().IsShutdown():
-		}
-	} else if setting.Indexer.StartupTimeout > 0 {
+	if setting.Indexer.StartupTimeout > 0 {
 		go func() {
 			pprof.SetGoroutineLabels(ctx)
 			timeout := setting.Indexer.StartupTimeout

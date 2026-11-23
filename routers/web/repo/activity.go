@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	activities_model "code.gitea.io/gitea/models/activities"
-	git_model "code.gitea.io/gitea/models/git"
-	"code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/services/context"
+	activities_model "gitea.dev/models/activities"
+	git_model "gitea.dev/models/git"
+	"gitea.dev/models/unit"
+	"gitea.dev/modules/templates"
+	"gitea.dev/services/context"
 )
 
 const (
@@ -48,13 +48,13 @@ func Activity(ctx *context.Context) {
 	ctx.Data["Period"] = period
 	ctx.Data["PeriodText"] = ctx.Tr("repo.activity.period." + period)
 
-	canReadCode := ctx.Repo.CanRead(unit.TypeCode)
+	canReadCode := ctx.Repo.Permission.CanRead(unit.TypeCode)
 	if canReadCode {
 		// GetActivityStats needs to read the default branch to get some information
 		branchExist, _ := git_model.IsBranchExist(ctx, ctx.Repo.Repository.ID, ctx.Repo.Repository.DefaultBranch)
 		if !branchExist {
 			ctx.Data["NotFoundPrompt"] = ctx.Tr("repo.branch.default_branch_not_exist", ctx.Repo.Repository.DefaultBranch)
-			ctx.NotFound(nil)
+			ctx.NotFound()
 			return
 		}
 	}
@@ -62,18 +62,18 @@ func Activity(ctx *context.Context) {
 	var err error
 	// TODO: refactor these arguments to a struct
 	ctx.Data["Activity"], err = activities_model.GetActivityStats(ctx, ctx.Repo.Repository, timeFrom,
-		ctx.Repo.CanRead(unit.TypeReleases),
-		ctx.Repo.CanRead(unit.TypeIssues),
-		ctx.Repo.CanRead(unit.TypePullRequests),
+		ctx.Repo.Permission.CanRead(unit.TypeReleases),
+		ctx.Repo.Permission.CanRead(unit.TypeIssues),
+		ctx.Repo.Permission.CanRead(unit.TypePullRequests),
 		canReadCode,
 	)
 	if err != nil {
-		ctx.ServerError("GetActivityStats", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if ctx.PageData["repoActivityTopAuthors"], err = activities_model.GetActivityStatsTopAuthors(ctx, ctx.Repo.Repository, timeFrom, 10); err != nil {
-		ctx.ServerError("GetActivityStatsTopAuthors", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -106,7 +106,7 @@ func ActivityAuthors(ctx *context.Context) {
 
 	authors, err := activities_model.GetActivityStatsTopAuthors(ctx, ctx.Repo.Repository, timeFrom, 10)
 	if err != nil {
-		ctx.ServerError("GetActivityStatsTopAuthors", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 

@@ -8,17 +8,18 @@ import (
 	"strconv"
 	"strings"
 
-	"code.gitea.io/gitea/models/db"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/models/webhook"
-	"code.gitea.io/gitea/modules/json"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/validation"
-	webhook_module "code.gitea.io/gitea/modules/webhook"
-	"code.gitea.io/gitea/services/context"
-	webhook_service "code.gitea.io/gitea/services/webhook"
+	"gitea.dev/models/db"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/models/webhook"
+	"gitea.dev/modules/json"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/validation"
+	webhook_module "gitea.dev/modules/webhook"
+	"gitea.dev/services/audit"
+	"gitea.dev/services/context"
+	webhook_service "gitea.dev/services/webhook"
 )
 
 // ListOwnerHooks lists the webhooks of the provided owner
@@ -43,12 +44,12 @@ func ListOwnerHooks(ctx *context.APIContext, owner *user_model.User) {
 			return
 		}
 	}
-	ctx.SetLinkHeader(int(count), listOptions.PageSize)
+	ctx.SetLinkHeader(count, listOptions.PageSize)
 	ctx.SetTotalCountHeader(count)
 	ctx.JSON(http.StatusOK, apiHooks)
 }
 
-// GetOwnerHook gets an user or organization webhook. Errors are written to ctx.
+// GetOwnerHook gets a user or organization webhook. Errors are written to ctx.
 func GetOwnerHook(ctx *context.APIContext, ownerID, hookID int64) (*webhook.Webhook, error) {
 	w, err := webhook.GetWebhookByOwnerID(ctx, ownerID, hookID)
 	if err != nil {
@@ -105,6 +106,7 @@ func checkCreateHookOption(ctx *context.APIContext, form *api.CreateHookOption) 
 func AddSystemHook(ctx *context.APIContext, form *api.CreateHookOption) {
 	hook, ok := addHook(ctx, form, 0, 0)
 	if ok {
+		audit.RecordScoped(ctx, nil, nil, audit.WebhookAdd, "webhook", hook.URL)
 		h, err := webhook_service.ToHook(setting.AppSubURL+"/-/admin", hook)
 		if err != nil {
 			ctx.APIErrorInternal(err)
@@ -114,12 +116,13 @@ func AddSystemHook(ctx *context.APIContext, form *api.CreateHookOption) {
 	}
 }
 
-// AddOwnerHook adds a hook to an user or organization
+// AddOwnerHook adds a hook to a user or organization
 func AddOwnerHook(ctx *context.APIContext, owner *user_model.User, form *api.CreateHookOption) {
 	hook, ok := addHook(ctx, form, owner.ID, 0)
 	if !ok {
 		return
 	}
+	audit.RecordScoped(ctx, owner, nil, audit.WebhookAdd, "webhook", hook.URL)
 	apiHook, ok := toAPIHook(ctx, owner.HomeLink(), hook)
 	if !ok {
 		return
@@ -134,6 +137,7 @@ func AddRepoHook(ctx *context.APIContext, form *api.CreateHookOption) {
 	if !ok {
 		return
 	}
+	audit.RecordScoped(ctx, nil, repo.Repository, audit.WebhookAdd, "webhook", hook.URL)
 	apiHook, ok := toAPIHook(ctx, repo.RepoLink, hook)
 	if !ok {
 		return
@@ -215,6 +219,7 @@ func addHook(ctx *context.APIContext, form *api.CreateHookOption, ownerID, repoI
 	w := &webhook.Webhook{
 		OwnerID:         ownerID,
 		RepoID:          repoID,
+		Name:            strings.TrimSpace(form.Name),
 		URL:             form.Config["url"],
 		ContentType:     webhook.ToHookContentType(form.Config["content_type"]),
 		Secret:          form.Config["secret"],
@@ -277,9 +282,9 @@ func EditSystemHook(ctx *context.APIContext, form *api.EditHookOption, hookID in
 		return
 	}
 	if !editHook(ctx, form, hook) {
-		ctx.APIErrorInternal(err)
 		return
 	}
+	audit.RecordScoped(ctx, nil, nil, audit.WebhookUpdate, "webhook", hook.URL)
 	updated, err := webhook.GetSystemOrDefaultWebhook(ctx, hookID)
 	if err != nil {
 		ctx.APIErrorInternal(err)
@@ -293,7 +298,7 @@ func EditSystemHook(ctx *context.APIContext, form *api.EditHookOption, hookID in
 	ctx.JSON(http.StatusOK, h)
 }
 
-// EditOwnerHook updates a webhook of an user or organization
+// EditOwnerHook updates a webhook of a user or organization
 func EditOwnerHook(ctx *context.APIContext, owner *user_model.User, form *api.EditHookOption, hookID int64) {
 	hook, err := GetOwnerHook(ctx, owner.ID, hookID)
 	if err != nil {
@@ -302,6 +307,7 @@ func EditOwnerHook(ctx *context.APIContext, owner *user_model.User, form *api.Ed
 	if !editHook(ctx, form, hook) {
 		return
 	}
+	audit.RecordScoped(ctx, owner, nil, audit.WebhookUpdate, "webhook", hook.URL)
 	updated, err := GetOwnerHook(ctx, owner.ID, hookID)
 	if err != nil {
 		return
@@ -323,6 +329,7 @@ func EditRepoHook(ctx *context.APIContext, form *api.EditHookOption, hookID int6
 	if !editHook(ctx, form, hook) {
 		return
 	}
+	audit.RecordScoped(ctx, nil, repo.Repository, audit.WebhookUpdate, "webhook", hook.URL)
 	updated, err := GetRepoHook(ctx, repo.Repository.ID, hookID)
 	if err != nil {
 		return
@@ -342,6 +349,9 @@ func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webh
 			if !validation.IsValidURL(url) {
 				ctx.APIError(http.StatusUnprocessableEntity, "Invalid url")
 				return false
+			}
+			if url != w.URL {
+				w.HeaderAuthorizationEncrypted = "" // the API never reveals the header, so it must not follow the hook to a new url
 			}
 			w.URL = url
 		}
@@ -370,17 +380,20 @@ func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webh
 		}
 	}
 
-	// Update events
-	w.HookEvents = updateHookEvents(form.Events)
-	w.PushOnly = false
-	w.SendEverything = false
-	w.ChooseEvents = true
-	w.BranchFilter = form.BranchFilter
-
-	err := w.SetHeaderAuthorization(form.AuthorizationHeader)
-	if err != nil {
-		ctx.APIErrorInternal(err)
-		return false
+	if len(form.Events) > 0 {
+		w.HookEvents = updateHookEvents(form.Events)
+		w.PushOnly = false
+		w.SendEverything = false
+		w.ChooseEvents = true
+	}
+	if form.BranchFilter != nil {
+		w.BranchFilter = *form.BranchFilter
+	}
+	if form.AuthorizationHeader != nil {
+		if err := w.SetHeaderAuthorization(*form.AuthorizationHeader); err != nil {
+			ctx.APIErrorInternal(err)
+			return false
+		}
 	}
 
 	if err := w.UpdateEvent(); err != nil {
@@ -392,6 +405,10 @@ func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webh
 		w.IsActive = *form.Active
 	}
 
+	if form.Name != nil {
+		w.Name = strings.TrimSpace(*form.Name)
+	}
+
 	if err := webhook.UpdateWebhook(ctx, w); err != nil {
 		ctx.APIErrorInternal(err)
 		return false
@@ -401,6 +418,10 @@ func editHook(ctx *context.APIContext, form *api.EditHookOption, w *webhook.Webh
 
 // DeleteOwnerHook deletes the hook owned by the owner.
 func DeleteOwnerHook(ctx *context.APIContext, owner *user_model.User, hookID int64) {
+	hook, err := GetOwnerHook(ctx, owner.ID, hookID)
+	if err != nil {
+		return
+	}
 	if err := webhook.DeleteWebhookByOwnerID(ctx, owner.ID, hookID); err != nil {
 		if webhook.IsErrWebhookNotExist(err) {
 			ctx.APIErrorNotFound()
@@ -409,5 +430,6 @@ func DeleteOwnerHook(ctx *context.APIContext, owner *user_model.User, hookID int
 		}
 		return
 	}
+	audit.RecordScoped(ctx, owner, nil, audit.WebhookRemove, "webhook", hook.URL)
 	ctx.Status(http.StatusNoContent)
 }

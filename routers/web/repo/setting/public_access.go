@@ -8,12 +8,12 @@ import (
 	"slices"
 	"strconv"
 
-	"code.gitea.io/gitea/models/perm"
-	"code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/models/perm"
+	"gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/services/context"
 )
 
 const tplRepoSettingsPublicAccess templates.TplName = "repo/settings/public_access"
@@ -125,6 +125,7 @@ func repoUnitPublicAccesses(ctx *context.Context) []*repoUnitPublicAccess {
 }
 
 func PublicAccess(ctx *context.Context) {
+	ctx.Data["Title"] = ctx.Tr("repo.settings.public_access")
 	ctx.Data["PageIsSettingsPublicAccess"] = true
 	ctx.Data["RepoUnitPublicAccesses"] = repoUnitPublicAccesses(ctx)
 	ctx.Data["GlobalForcePrivate"] = setting.Repository.ForcePrivate
@@ -146,7 +147,7 @@ func PublicAccessPost(ctx *context.Context) {
 			EveryoneAccessMode:  parsed.EveryoneAccessMode,
 		})
 		if err != nil {
-			ctx.ServerError("UpdateRepoUnitPublicAccess", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 	}

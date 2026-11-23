@@ -171,9 +171,9 @@ test('EditorMarkdown', () => {
     pos: number;
   };
   const testInput = (input: ValueWithCursor, result: ValueWithCursor) => {
-    const intputValue = typeof input === 'string' ? input : input.value;
-    const inputPos = typeof input === 'string' ? intputValue.length : input.pos;
-    textarea.value = intputValue;
+    const inputValue = typeof input === 'string' ? input : input.value;
+    const inputPos = typeof input === 'string' ? inputValue.length : input.pos;
+    textarea.value = inputValue;
     textarea.setSelectionRange(inputPos, inputPos);
 
     const e = new KeyboardEvent('keydown', {key: 'Enter', cancelable: true});
@@ -199,5 +199,5 @@ test('EditorMarkdown', () => {
   testInput('- [ ]', '- [ ]\n- ');
   testInput('- [ ] foo', '- [ ] foo\n- [ ] ');
   testInput('* [x] foo', '* [x] foo\n* [ ] ');
-  testInput('1. [x] foo', '1. [x] foo\n2. [ ] ');
+  testInput('1. [X] foo', '1. [X] foo\n2. [ ] ');
 });

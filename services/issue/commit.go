@@ -10,19 +10,22 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	issues_model "code.gitea.io/gitea/models/issues"
-	access_model "code.gitea.io/gitea/models/perm/access"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/references"
-	"code.gitea.io/gitea/modules/repository"
+	issues_model "gitea.dev/models/issues"
+	access_model "gitea.dev/models/perm/access"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/references"
+	"gitea.dev/modules/repository"
 )
 
 const (
@@ -33,11 +36,13 @@ const (
 	secondsByMonth  = 4 * secondsByWeek                  // seconds in a month
 )
 
-var reDuration = regexp.MustCompile(`(?i)^(?:(\d+([\.,]\d+)?)(?:mo))?(?:(\d+([\.,]\d+)?)(?:w))?(?:(\d+([\.,]\d+)?)(?:d))?(?:(\d+([\.,]\d+)?)(?:h))?(?:(\d+([\.,]\d+)?)(?:m))?$`)
+var reDuration = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`(?i)^(?:(\d+([\.,]\d+)?)(?:mo))?(?:(\d+([\.,]\d+)?)(?:w))?(?:(\d+([\.,]\d+)?)(?:d))?(?:(\d+([\.,]\d+)?)(?:h))?(?:(\d+([\.,]\d+)?)(?:m))?$`)
+})
 
 // timeLogToAmount parses time log string and returns amount in seconds
 func timeLogToAmount(str string) int64 {
-	matches := reDuration.FindAllStringSubmatch(str, -1)
+	matches := reDuration().FindAllStringSubmatch(str, -1)
 	if len(matches) == 0 {
 		return 0
 	}
@@ -113,7 +118,7 @@ func getIssueFromRef(ctx context.Context, repo *repo_model.Repository, index int
 	issue, err := issues_model.GetIssueByIndex(ctx, repo.ID, index)
 	if err != nil {
 		if issues_model.IsErrIssueNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // return nil to indicate that the object does not exist
 		}
 		return nil, err
 	}
@@ -123,9 +128,7 @@ func getIssueFromRef(ctx context.Context, repo *repo_model.Repository, index int
 // UpdateIssuesCommit checks if issues are manipulated by commit message.
 func UpdateIssuesCommit(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, commits []*repository.PushCommit, branchName string) error {
 	// Commits are appended in the reverse order.
-	for i := len(commits) - 1; i >= 0; i-- {
-		c := commits[i]
-
+	for _, c := range slices.Backward(commits) {
 		type markKey struct {
 			ID     int64
 			Action references.XRefAction
@@ -156,8 +159,9 @@ func UpdateIssuesCommit(ctx context.Context, doer *user_model.User, repo *repo_m
 			if refIssue == nil {
 				continue
 			}
+			refIssue.Repo = refRepo
 
-			perm, err := access_model.GetUserRepoPermission(ctx, refRepo, doer)
+			perm, err := access_model.GetDoerRepoPermission(ctx, refRepo, doer)
 			if err != nil {
 				return err
 			}
@@ -182,20 +186,25 @@ func UpdateIssuesCommit(ctx context.Context, doer *user_model.User, repo *repo_m
 			}
 
 			message := fmt.Sprintf(`<a href="%s/commit/%s">%s</a>`, html.EscapeString(repo.Link()), html.EscapeString(url.PathEscape(c.Sha1)), html.EscapeString(strings.SplitN(c.Message, "\n", 2)[0]))
-			if err = CreateRefComment(ctx, doer, refRepo, refIssue, message, c.Sha1); err != nil {
+			if err = CreateRefComment(ctx, doer, refIssue, repo.ID, message, c.Sha1); err != nil {
 				if errors.Is(err, user_model.ErrBlockedUser) {
 					continue
 				}
 				return err
 			}
 
-			// Only issues can be closed/reopened this way, and user needs the correct permissions
-			if refIssue.IsPull || !canclose {
+			// Only issues can be reopened this way, and user needs the correct permissions
+			if !canclose || (refIssue.IsPull && ref.Action == references.XRefActionReopens) {
 				continue
 			}
 
 			// Only process closing/reopening keywords
 			if ref.Action != references.XRefActionCloses && ref.Action != references.XRefActionReopens {
+				continue
+			}
+
+			// With an external tracker, pull requests are referenced as "!N"
+			if !ref.IsPull && refIssue.IsPull && refRepo.UnitEnabled(ctx, unit.TypeExternalTracker) {
 				continue
 			}
 
@@ -212,7 +221,6 @@ func UpdateIssuesCommit(ctx context.Context, doer *user_model.User, repo *repo_m
 				}
 			}
 
-			refIssue.Repo = refRepo
 			if ref.Action == references.XRefActionCloses && !refIssue.IsClosed {
 				if len(ref.TimeLog) > 0 {
 					if err := issueAddTime(ctx, refIssue, doer, c.Timestamp, ref.TimeLog); err != nil {

@@ -8,10 +8,12 @@ import (
 	"context"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/util"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
+
+	"xorm.io/builder"
 )
 
 // ErrMirrorNotExist mirror does not exist error
@@ -27,6 +29,7 @@ type Mirror struct {
 
 	UpdatedUnix    timeutil.TimeStamp `xorm:"INDEX"`
 	NextUpdateUnix timeutil.TimeStamp `xorm:"INDEX"`
+	LastSyncUnix   timeutil.TimeStamp `xorm:"INDEX"`
 
 	LFS         bool   `xorm:"lfs_enabled NOT NULL DEFAULT false"`
 	LFSEndpoint string `xorm:"lfs_endpoint TEXT"`
@@ -75,8 +78,7 @@ func (m *Mirror) ScheduleNextUpdate() {
 
 // GetMirrorByRepoID returns mirror information of a repository.
 func GetMirrorByRepoID(ctx context.Context, repoID int64) (*Mirror, error) {
-	m := &Mirror{RepoID: repoID}
-	has, err := db.GetEngine(ctx).Get(m)
+	m, has, err := db.Get[Mirror](ctx, builder.Eq{"repo_id": repoID})
 	if err != nil {
 		return nil, err
 	} else if !has {
@@ -98,9 +100,9 @@ func TouchMirror(ctx context.Context, m *Mirror) error {
 	return err
 }
 
-// DeleteMirrorByRepoID deletes a mirror by repoID
-func DeleteMirrorByRepoID(ctx context.Context, repoID int64) error {
-	_, err := db.GetEngine(ctx).Delete(&Mirror{RepoID: repoID})
+// DeleteRepoPullMirror deletes the repo's mirror (pull mirror)
+func DeleteRepoPullMirror(ctx context.Context, repoID int64) error {
+	_, err := db.GetEngine(ctx).Where("repo_id=?", repoID).Delete(&Mirror{})
 	return err
 }
 

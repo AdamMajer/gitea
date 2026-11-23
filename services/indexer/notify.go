@@ -6,16 +6,16 @@ package indexer
 import (
 	"context"
 
-	issues_model "code.gitea.io/gitea/models/issues"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	code_indexer "code.gitea.io/gitea/modules/indexer/code"
-	issue_indexer "code.gitea.io/gitea/modules/indexer/issues"
-	stats_indexer "code.gitea.io/gitea/modules/indexer/stats"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/repository"
-	"code.gitea.io/gitea/modules/setting"
-	notify_service "code.gitea.io/gitea/services/notify"
+	issues_model "gitea.dev/models/issues"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	code_indexer "gitea.dev/modules/indexer/code"
+	issue_indexer "gitea.dev/modules/indexer/issues"
+	stats_indexer "gitea.dev/modules/indexer/stats"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/repository"
+	"gitea.dev/modules/setting"
+	notify_service "gitea.dev/services/notify"
 )
 
 type indexerNotifier struct {
@@ -27,10 +27,6 @@ var _ notify_service.Notifier = &indexerNotifier{}
 // NewNotifier create a new indexerNotifier notifier
 func NewNotifier() notify_service.Notifier {
 	return &indexerNotifier{}
-}
-
-func (r *indexerNotifier) AdoptRepository(ctx context.Context, doer, u *user_model.User, repo *repo_model.Repository) {
-	r.MigrateRepository(ctx, doer, u, repo)
 }
 
 func (r *indexerNotifier) CreateIssueComment(ctx context.Context, doer *user_model.User, repo *repo_model.Repository,
@@ -141,6 +137,12 @@ func (r *indexerNotifier) IssueChangeAssignee(ctx context.Context, doer *user_mo
 
 func (r *indexerNotifier) IssueChangeMilestone(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, oldMilestoneID int64) {
 	issue_indexer.UpdateIssueIndexer(ctx, issue.ID)
+}
+
+func (r *indexerNotifier) IssueChangeProjects(ctx context.Context, doer *user_model.User, issue *issues_model.Issue, addedProjectIDs, removedProjectIDs []int64) {
+	if len(addedProjectIDs) > 0 || len(removedProjectIDs) > 0 {
+		issue_indexer.UpdateIssueIndexer(ctx, issue.ID)
+	}
 }
 
 func (r *indexerNotifier) IssueChangeLabels(ctx context.Context, doer *user_model.User, issue *issues_model.Issue,

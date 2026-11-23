@@ -6,13 +6,17 @@ package ldap
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
-	"code.gitea.io/gitea/modules/container"
-	"code.gitea.io/gitea/modules/log"
+	"gitea.dev/modules/container"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/util"
 
 	"github.com/go-ldap/ldap/v3"
 )
@@ -111,25 +115,85 @@ func (source *Source) findUserDN(l *ldap.Conn, name string) (string, bool) {
 func dial(source *Source) (*ldap.Conn, error) {
 	log.Trace("Dialing LDAP with security protocol (%v) without verifying: %v", source.SecurityProtocol, source.SkipVerify)
 
+	hosts := util.SplitTrimSpace(source.Host, ",")
+	if len(hosts) == 0 {
+		return nil, errors.New("no LDAP host configured")
+	}
+
+	type dialResult struct {
+		index int
+		conn  *ldap.Conn
+		err   error
+	}
+	results := make(chan dialResult)
+	done := make(chan struct{})
+	defer close(done)
+
+	var errs []error
+	for started := 0; len(errs) < len(hosts); {
+		var headStart <-chan time.Time
+		if started < len(hosts) {
+			index := started
+			go func() {
+				conn, err := dialHost(source, hosts[index])
+				select {
+				case results <- dialResult{index, conn, err}:
+				case <-done:
+					if conn != nil {
+						conn.Close()
+					}
+				}
+			}()
+			started++
+			headStart = time.After(250 * time.Millisecond)
+		}
+		select {
+		case result := <-results:
+			if result.err == nil {
+				if result.index > 0 {
+					log.Warn("LDAP source %q is using fallback host %q, earlier hosts failed or are slow: %v", source.Name, hosts[result.index], errs)
+				}
+				return result.conn, nil
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", hosts[result.index], result.err))
+		case <-headStart:
+		}
+	}
+	return nil, fmt.Errorf("error during Dial: %w", errors.Join(errs...))
+}
+
+func dialHost(source *Source, host string) (*ldap.Conn, error) {
+	protocol, port := source.SecurityProtocol, strconv.Itoa(source.Port)
+	if strings.Contains(host, "://") {
+		hostURL, err := url.Parse(host)
+		if err != nil {
+			return nil, err
+		}
+		urlProtocol, ok := urlSecurityProtocols[hostURL.Scheme]
+		if !ok || hostURL.Hostname() == "" || hostURL.User != nil || source.UseTLS() != (urlProtocol != SecurityProtocolUnencrypted) {
+			return nil, errors.New("unsupported LDAP URL")
+		}
+		protocol, host, port = urlProtocol, hostURL.Hostname(), hostURL.Port()
+	}
+
 	tlsConfig := &tls.Config{
-		ServerName:         source.Host,
+		ServerName:         host,
 		InsecureSkipVerify: source.SkipVerify,
 	}
 
-	if source.SecurityProtocol == SecurityProtocolLDAPS {
-		return ldap.DialTLS("tcp", net.JoinHostPort(source.Host, strconv.Itoa(source.Port)), tlsConfig) //nolint:staticcheck // DialTLS is deprecated
-	}
-
-	conn, err := ldap.Dial("tcp", net.JoinHostPort(source.Host, strconv.Itoa(source.Port))) //nolint:staticcheck // Dial is deprecated
+	dialURL := url.URL{Scheme: util.Iif(protocol == SecurityProtocolLDAPS, "ldaps", "ldap"), Host: net.JoinHostPort(host, port)}
+	conn, err := ldap.DialURL(dialURL.String(), ldap.DialWithTLSConfig(tlsConfig))
 	if err != nil {
-		return nil, fmt.Errorf("error during Dial: %w", err)
+		return nil, err
 	}
 
-	if source.SecurityProtocol == SecurityProtocolStartTLS {
+	if protocol == SecurityProtocolStartTLS {
+		conn.SetTimeout(ldap.DefaultTimeout)
 		if err = conn.StartTLS(tlsConfig); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("error during StartTLS: %w", err)
 		}
+		conn.SetTimeout(0)
 	}
 
 	return conn, nil

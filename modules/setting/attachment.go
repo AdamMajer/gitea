@@ -15,14 +15,10 @@ var Attachment AttachmentSettingType
 
 func loadAttachmentFrom(rootCfg ConfigProvider) (err error) {
 	Attachment = AttachmentSettingType{
-		AllowedTypes: ".avif,.cpuprofile,.csv,.dmp,.docx,.fodg,.fodp,.fods,.fodt,.gif,.gz,.jpeg,.jpg,.json,.jsonc,.log,.md,.mov,.mp4,.odf,.odg,.odp,.ods,.odt,.patch,.pdf,.png,.pptx,.svg,.tgz,.txt,.webm,.webp,.xls,.xlsx,.zip",
-
-		// FIXME: this size is used for both "issue attachment" and "release attachment"
-		// The design is not right, these two should be different settings
-		MaxSize: 2048,
-
-		MaxFiles: 5,
-		Enabled:  true,
+		AllowedTypes: ".avif,.cpuprofile,.csv,.dmp,.docx,.fodg,.fodp,.fods,.fodt,.gif,.gz,.jpeg,.jpg,.json,.jsonc,.jxl,.log,.md,.mov,.mp4,.odf,.odg,.odp,.ods,.odt,.patch,.pdf,.png,.pptx,.svg,.tgz,.txt,.webm,.webp,.xls,.xlsx,.zip",
+		MaxSize:      100,
+		MaxFiles:     5,
+		Enabled:      true,
 	}
 	sec, _ := rootCfg.GetSection("attachment")
 	if sec == nil {

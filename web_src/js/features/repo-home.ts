@@ -3,8 +3,12 @@ import {hideElem, queryElemChildren, showElem} from '../utils/dom.ts';
 import {POST} from '../modules/fetch.ts';
 import {showErrorToast, type Toast} from '../modules/toast.ts';
 import {fomanticQuery} from '../modules/fomantic/base.ts';
+import type {FomanticApiResponse, JQueryElem} from '../types.ts';
 
 const {appSubUrl} = window.config;
+
+type TopicSearchResponse = {topics: Array<{topic_name: string}>};
+type TopicSearchResult = {description: string, 'data-value': string};
 
 export function initRepoTopicBar() {
   const mgrBtn = document.querySelector<HTMLButtonElement>('#manage_topic');
@@ -63,7 +67,7 @@ export function initRepoTopicBar() {
       lastErrorToast = showErrorToast(responseData.message, {duration: 5000});
       if (responseData.invalidTopics && responseData.invalidTopics.length > 0) {
         const {invalidTopics} = responseData;
-        const topicLabels = queryElemChildren(topicDropdown, 'a.ui.label');
+        const topicLabels = queryElemChildren(topicDropdown, '.ui.label');
         for (const [index, value] of topics.split(',').entries()) {
           if (invalidTopics.includes(value)) {
             topicLabels[index].classList.remove('green');
@@ -79,7 +83,6 @@ export function initRepoTopicBar() {
     forceSelection: false,
     fullTextSearch: 'exact',
     fields: {name: 'description', value: 'data-value'},
-    saveRemoteData: false,
     label: {
       transition: 'horizontal flip',
       duration: 200,
@@ -88,18 +91,14 @@ export function initRepoTopicBar() {
     apiSettings: {
       url: `${appSubUrl}/explore/topics/search?q={query}`,
       throttle: 500,
-      cache: false,
-      onResponse(this: any, res: any) {
-        const formattedResponse = {
+      onResponse(this: {urlData: {query: string}}, res: TopicSearchResponse) {
+        const formattedResponse: FomanticApiResponse<TopicSearchResult> = {
           success: false,
-          results: [] as Array<Record<string, any>>,
+          results: [],
         };
         const query = stripTags(this.urlData.query.trim());
         let found_query = false;
-        const current_topics = [];
-        for (const el of queryElemChildren(topicDropdown, 'a.ui.label.visible')) {
-          current_topics.push(el.getAttribute('data-value'));
-        }
+        const current_topics = Array.from(queryElemChildren(topicDropdown, '.ui.label.visible'), (el) => el.getAttribute('data-value'));
 
         if (res.topics) {
           let found = false;
@@ -139,7 +138,7 @@ export function initRepoTopicBar() {
       this.attr('data-value', value).contents().first().replaceWith(value);
       return fomanticQuery(this);
     },
-    onAdd(addedValue: string, _addedText: any, $addedChoice: any) {
+    onAdd(addedValue: string, _addedText: any, $addedChoice: JQueryElem) {
       addedValue = addedValue.toLowerCase().trim();
       $addedChoice[0].setAttribute('data-value', addedValue);
       $addedChoice[0].setAttribute('data-text', addedValue);

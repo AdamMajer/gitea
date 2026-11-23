@@ -9,24 +9,27 @@ import (
 	"net/http"
 	"time"
 
-	org_model "code.gitea.io/gitea/models/organization"
-	packages_model "code.gitea.io/gitea/models/packages"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/auth/password"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/timeutil"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/services/auth"
-	"code.gitea.io/gitea/services/auth/source/db"
-	"code.gitea.io/gitea/services/auth/source/smtp"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/forms"
-	"code.gitea.io/gitea/services/mailer"
-	"code.gitea.io/gitea/services/user"
+	audit_model "gitea.dev/models/audit"
+	org_model "gitea.dev/models/organization"
+	packages_model "gitea.dev/models/packages"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/auth/password"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/timeutil"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	"gitea.dev/services/audit"
+	"gitea.dev/services/auth"
+	"gitea.dev/services/auth/source/db"
+	"gitea.dev/services/auth/source/smtp"
+	"gitea.dev/services/context"
+	"gitea.dev/services/forms"
+	"gitea.dev/services/mailer"
+	"gitea.dev/services/user"
 )
 
 const (
@@ -36,11 +39,10 @@ const (
 // Account renders change user's password, user's email and user suicide page
 func Account(ctx *context.Context) {
 	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageCredentials, setting.UserFeatureDeletion) {
-		ctx.NotFound(errors.New("account setting are not allowed to be changed"))
+		ctx.NotFound()
 		return
 	}
 
-	ctx.Data["Title"] = ctx.Tr("settings.account")
 	ctx.Data["PageIsSettingsAccount"] = true
 	ctx.Data["Email"] = ctx.Doer.Email
 
@@ -52,12 +54,11 @@ func Account(ctx *context.Context) {
 // AccountPost response for change user's password
 func AccountPost(ctx *context.Context) {
 	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageCredentials) {
-		ctx.NotFound(errors.New("password setting is not allowed to be changed"))
+		ctx.NotFound()
 		return
 	}
 
-	form := web.GetForm(ctx).(*forms.ChangePasswordForm)
-	ctx.Data["Title"] = ctx.Tr("settings_title")
+	form := web.GetForm[*forms.ChangePasswordForm](ctx)
 	ctx.Data["PageIsSettingsAccount"] = true
 	ctx.Data["Email"] = ctx.Doer.Email
 
@@ -88,7 +89,7 @@ func AccountPost(ctx *context.Context) {
 			case password.IsErrIsPwnedRequest(err):
 				ctx.Flash.Error(ctx.Tr("auth.password_pwned_err"))
 			default:
-				ctx.ServerError("UpdateAuth", err)
+				ctx.ServerErrorAuto(err)
 				return
 			}
 		} else {
@@ -102,22 +103,32 @@ func AccountPost(ctx *context.Context) {
 // EmailPost response for change user's email
 func EmailPost(ctx *context.Context) {
 	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageCredentials) {
-		ctx.NotFound(errors.New("emails are not allowed to be changed"))
+		ctx.NotFound()
 		return
 	}
 
-	form := web.GetForm(ctx).(*forms.AddEmailForm)
-	ctx.Data["Title"] = ctx.Tr("settings_title")
+	form := web.GetForm[*forms.AddEmailForm](ctx)
 	ctx.Data["PageIsSettingsAccount"] = true
 	ctx.Data["Email"] = ctx.Doer.Email
 
 	// Make email address primary.
 	if ctx.FormString("_method") == "PRIMARY" {
-		if err := user_model.MakeActiveEmailPrimary(ctx, ctx.FormInt64("id")); err != nil {
-			ctx.ServerError("MakeEmailPrimary", err)
+		emailID := ctx.FormInt64("id")
+		if err := user_model.MakeActiveEmailPrimary(ctx, ctx.Doer.ID, emailID); err != nil {
+			if user_model.IsErrEmailAddressNotExist(err) {
+				ctx.Flash.Error(ctx.Tr("settings.email_primary_not_found"))
+				ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+				return
+			}
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
+		if email, err := user_model.GetEmailAddressByID(ctx, ctx.Doer.ID, emailID); err != nil {
+			log.Error("GetEmailAddressByID: %v", err)
+		} else if email != nil {
+			audit.Record(ctx, audit_model.UserEmailPrimaryChange, ctx.Doer, "email", email.Email)
+		}
 		log.Trace("Email made primary: %s", ctx.Doer.Name)
 		ctx.Redirect(setting.AppSubURL + "/user/settings/account")
 		return
@@ -181,13 +192,13 @@ func EmailPost(ctx *context.Context) {
 		if user_model.IsErrEmailAlreadyUsed(err) {
 			loadAccountData(ctx)
 
-			ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplSettingsAccount, &form)
-		} else if user_model.IsErrEmailCharIsNotSupported(err) || user_model.IsErrEmailInvalid(err) {
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.email_been_used"), tplSettingsAccount, &form)
+		} else if errors.Is(err, util.ErrInvalidArgument) {
 			loadAccountData(ctx)
 
-			ctx.RenderWithErr(ctx.Tr("form.email_invalid"), tplSettingsAccount, &form)
+			ctx.RenderWithErrDeprecated(ctx.Tr("form.email_invalid"), tplSettingsAccount, &form)
 		} else {
-			ctx.ServerError("AddEmailAddresses", err)
+			ctx.ServerErrorAuto(err)
 		}
 		return
 	}
@@ -211,17 +222,17 @@ func EmailPost(ctx *context.Context) {
 // DeleteEmail response for delete user's email
 func DeleteEmail(ctx *context.Context) {
 	if user_model.IsFeatureDisabledWithLoginType(ctx.Doer, setting.UserFeatureManageCredentials) {
-		ctx.NotFound(errors.New("emails are not allowed to be changed"))
+		ctx.NotFound()
 		return
 	}
 	email, err := user_model.GetEmailAddressByID(ctx, ctx.Doer.ID, ctx.FormInt64("id"))
 	if err != nil || email == nil {
-		ctx.ServerError("GetEmailAddressByID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := user.DeleteEmailAddresses(ctx, ctx.Doer, []string{email.Email}); err != nil {
-		ctx.ServerError("DeleteEmailAddresses", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	log.Trace("Email address deleted: %s", ctx.Doer.Name)
@@ -237,68 +248,52 @@ func DeleteAccount(ctx *context.Context) {
 		return
 	}
 
-	ctx.Data["Title"] = ctx.Tr("settings_title")
-	ctx.Data["PageIsSettingsAccount"] = true
-	ctx.Data["Email"] = ctx.Doer.Email
-
 	if _, _, err := auth.UserSignIn(ctx, ctx.Doer.Name, ctx.FormString("password")); err != nil {
 		switch {
 		case user_model.IsErrUserNotExist(err):
-			loadAccountData(ctx)
-
-			ctx.RenderWithErr(ctx.Tr("form.user_not_exist"), tplSettingsAccount, nil)
+			ctx.JSONError(ctx.Tr("form.user_not_exist"))
 		case errors.Is(err, smtp.ErrUnsupportedLoginType):
-			loadAccountData(ctx)
-
-			ctx.RenderWithErr(ctx.Tr("form.unsupported_login_type"), tplSettingsAccount, nil)
+			ctx.JSONError(ctx.Tr("form.unsupported_login_type"))
 		case errors.As(err, &db.ErrUserPasswordNotSet{}):
-			loadAccountData(ctx)
-
-			ctx.RenderWithErr(ctx.Tr("form.unset_password"), tplSettingsAccount, nil)
+			ctx.JSONError(ctx.Tr("form.unset_password"))
 		case errors.As(err, &db.ErrUserPasswordInvalid{}):
-			loadAccountData(ctx)
-
-			ctx.RenderWithErr(ctx.Tr("form.enterred_invalid_password"), tplSettingsAccount, nil)
+			ctx.JSONError(ctx.Tr("form.enterred_invalid_password"))
 		default:
-			ctx.ServerError("UserSignIn", err)
+			ctx.ServerErrorAuto(err)
 		}
 		return
 	}
 
 	// admin should not delete themself
 	if ctx.Doer.IsAdmin {
-		ctx.Flash.Error(ctx.Tr("form.admin_cannot_delete_self"))
-		ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+		ctx.JSONError(ctx.Tr("form.admin_cannot_delete_self"))
 		return
 	}
 
 	if err := user.DeleteUser(ctx, ctx.Doer, false); err != nil {
 		switch {
 		case repo_model.IsErrUserOwnRepos(err):
-			ctx.Flash.Error(ctx.Tr("form.still_own_repo"))
-			ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+			ctx.JSONError(ctx.Tr("form.still_own_repo"))
 		case org_model.IsErrUserHasOrgs(err):
-			ctx.Flash.Error(ctx.Tr("form.still_has_org"))
-			ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+			ctx.JSONError(ctx.Tr("form.still_has_org"))
 		case packages_model.IsErrUserOwnPackages(err):
-			ctx.Flash.Error(ctx.Tr("form.still_own_packages"))
-			ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+			ctx.JSONError(ctx.Tr("form.still_own_packages"))
 		case user_model.IsErrDeleteLastAdminUser(err):
-			ctx.Flash.Error(ctx.Tr("auth.last_admin"))
-			ctx.Redirect(setting.AppSubURL + "/user/settings/account")
+			ctx.JSONError(ctx.Tr("auth.last_admin"))
 		default:
-			ctx.ServerError("DeleteUser", err)
+			ctx.ServerErrorAuto(err)
 		}
-	} else {
-		log.Trace("Account deleted: %s", ctx.Doer.Name)
-		ctx.Redirect(setting.AppSubURL + "/")
+		return
 	}
+
+	ctx.JSONRedirect(setting.AppSubURL + "/")
 }
 
 func loadAccountData(ctx *context.Context) {
+	ctx.Data["Title"] = ctx.Tr("settings.account")
 	emlist, err := user_model.GetEmailAddresses(ctx, ctx.Doer.ID)
 	if err != nil {
-		ctx.ServerError("GetEmailAddresses", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	type UserEmail struct {
@@ -316,7 +311,6 @@ func loadAccountData(ctx *context.Context) {
 	ctx.Data["Emails"] = emails
 	ctx.Data["ActivationsPending"] = pendingActivation
 	ctx.Data["CanAddEmails"] = !pendingActivation || !setting.Service.RegisterEmailConfirm
-	ctx.Data["UserDisabledFeatures"] = user_model.DisabledFeaturesWithLoginType(ctx.Doer)
 
 	if setting.Service.UserDeleteWithCommentsMaxTime != 0 {
 		ctx.Data["UserDeleteWithCommentsMaxTime"] = setting.Service.UserDeleteWithCommentsMaxTime.String()

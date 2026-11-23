@@ -4,7 +4,7 @@
 package swagger
 
 import (
-	api "code.gitea.io/gitea/modules/structs"
+	api "gitea.dev/modules/structs"
 )
 
 // ServerVersion
@@ -40,13 +40,6 @@ type swaggerResponseLicensesTemplateList struct {
 type swaggerResponseLicenseTemplateInfo struct {
 	// in:body
 	Body api.LicenseTemplateInfo `json:"body"`
-}
-
-// StringSlice
-// swagger:response StringSlice
-type swaggerResponseStringSlice struct {
-	// in:body
-	Body []string `json:"body"`
 }
 
 // LabelTemplateList

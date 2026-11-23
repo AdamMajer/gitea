@@ -4,20 +4,22 @@
 package actions
 
 import (
+	stdctx "context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
-	actions_model "code.gitea.io/gitea/models/actions"
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	shared_user "code.gitea.io/gitea/routers/web/shared/user"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/forms"
+	actions_model "gitea.dev/models/actions"
+	"gitea.dev/models/db"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/modules/web"
+	shared_user "gitea.dev/routers/web/shared/user"
+	"gitea.dev/services/audit"
+	"gitea.dev/services/context"
+	"gitea.dev/services/forms"
 )
 
 const (
@@ -58,8 +60,7 @@ func getRunnersCtx(ctx *context.Context) (*runnersCtx, error) {
 
 	if ctx.Data["PageIsOrgSettings"] == true {
 		if _, err := shared_user.RenderUserOrgHeader(ctx); err != nil {
-			ctx.ServerError("RenderUserOrgHeader", err)
-			return nil, nil
+			return nil, fmt.Errorf("RenderUserOrgHeader: %w", err)
 		}
 		return &runnersCtx{
 			RepoID:             0,
@@ -99,12 +100,12 @@ func getRunnersCtx(ctx *context.Context) (*runnersCtx, error) {
 // Runners render settings/actions/runners page for repo level
 func Runners(ctx *context.Context) {
 	ctx.Data["PageIsSharedSettingsRunners"] = true
-	ctx.Data["Title"] = ctx.Tr("actions.actions")
+	ctx.Data["Title"] = ctx.Tr("actions.runners")
 	ctx.Data["PageType"] = "runners"
 
 	rCtx, err := getRunnersCtx(ctx)
 	if err != nil {
-		ctx.ServerError("getRunnersCtx", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -128,26 +129,19 @@ func Runners(ctx *context.Context) {
 
 	runners, count, err := db.FindAndCount[actions_model.ActionRunner](ctx, opts)
 	if err != nil {
-		ctx.ServerError("CountRunners", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err := actions_model.RunnerList(runners).LoadAttributes(ctx); err != nil {
-		ctx.ServerError("LoadAttributes", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	// ownid=0,repo_id=0,means this token is used for global
-	var token *actions_model.ActionRunnerToken
-	token, err = actions_model.GetLatestRunnerToken(ctx, opts.OwnerID, opts.RepoID)
-	if errors.Is(err, util.ErrNotExist) || (token != nil && !token.IsActive) {
-		token, err = actions_model.NewRunnerToken(ctx, opts.OwnerID, opts.RepoID)
-		if err != nil {
-			ctx.ServerError("CreateRunnerToken", err)
-			return
-		}
-	} else if err != nil {
-		ctx.ServerError("GetLatestRunnerToken", err)
+	token, err := actions_model.GetOrCreateActiveRunnerToken(ctx, opts.OwnerID, opts.RepoID)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -158,8 +152,9 @@ func Runners(ctx *context.Context) {
 	ctx.Data["RunnerOwnerID"] = opts.OwnerID
 	ctx.Data["RunnerRepoID"] = opts.RepoID
 	ctx.Data["SortType"] = opts.Sort
+	ctx.Data["AllowBulkActions"] = rCtx.IsAdmin
 
-	pager := context.NewPagination(int(count), opts.PageSize, opts.Page, 5)
+	pager := context.NewPagerBuilder(ctx).TotalCount(count).PerPageLimit(opts.PageSize).CurPage(opts.Page).Build()
 
 	ctx.Data["Page"] = pager
 
@@ -172,7 +167,7 @@ func RunnersEdit(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("actions.runners.edit_runner")
 	rCtx, err := getRunnersCtx(ctx)
 	if err != nil {
-		ctx.ServerError("getRunnersCtx", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -184,16 +179,15 @@ func RunnersEdit(ctx *context.Context) {
 
 	runner, err := actions_model.GetRunnerByID(ctx, runnerID)
 	if err != nil {
-		ctx.ServerError("GetRunnerByID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if err := runner.LoadAttributes(ctx); err != nil {
-		ctx.ServerError("LoadAttributes", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if !runner.EditableInContext(ownerID, repoID) {
-		err = errors.New("no permission to edit this runner")
-		ctx.NotFound(err)
+		ctx.NotFound()
 		return
 	}
 
@@ -210,17 +204,17 @@ func RunnersEdit(ctx *context.Context) {
 
 	tasks, count, err := db.FindAndCount[actions_model.ActionTask](ctx, opts)
 	if err != nil {
-		ctx.ServerError("CountTasks", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	if err = actions_model.TaskList(tasks).LoadAttributes(ctx); err != nil {
-		ctx.ServerError("TasksLoadAttributes", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
 	ctx.Data["Tasks"] = tasks
-	pager := context.NewPagination(int(count), opts.PageSize, opts.Page, 5)
+	pager := context.NewPagerBuilder(ctx).TotalCount(count).PerPageLimit(opts.PageSize).CurPage(opts.Page).Build()
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, rCtx.RunnerEditTemplate)
@@ -229,7 +223,7 @@ func RunnersEdit(ctx *context.Context) {
 func RunnersEditPost(ctx *context.Context) {
 	rCtx, err := getRunnersCtx(ctx)
 	if err != nil {
-		ctx.ServerError("getRunnersCtx", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -241,15 +235,15 @@ func RunnersEditPost(ctx *context.Context) {
 	runner, err := actions_model.GetRunnerByID(ctx, runnerID)
 	if err != nil {
 		log.Warn("RunnerDetailsEditPost.GetRunnerByID failed: %v, url: %s", err, ctx.Req.URL)
-		ctx.ServerError("RunnerDetailsEditPost.GetRunnerByID", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	if !runner.EditableInContext(ownerID, repoID) {
-		ctx.NotFound(util.NewPermissionDeniedErrorf("no permission to edit this runner"))
+		ctx.NotFound()
 		return
 	}
 
-	form := web.GetForm(ctx).(*forms.EditRunnerForm)
+	form := web.GetForm[*forms.EditRunnerForm](ctx)
 	runner.Description = form.Description
 
 	err = actions_model.UpdateRunner(ctx, runner, "description")
@@ -269,7 +263,7 @@ func RunnersEditPost(ctx *context.Context) {
 func ResetRunnerRegistrationToken(ctx *context.Context) {
 	rCtx, err := getRunnersCtx(ctx)
 	if err != nil {
-		ctx.ServerError("getRunnersCtx", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -278,9 +272,10 @@ func ResetRunnerRegistrationToken(ctx *context.Context) {
 	redirectTo := rCtx.RedirectLink
 
 	if _, err := actions_model.NewRunnerToken(ctx, ownerID, repoID); err != nil {
-		ctx.ServerError("ResetRunnerRegistrationToken", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
+	audit.RecordScopedByID(ctx, ownerID, repoID, audit.RunnerToken)
 	ctx.Flash.Success(ctx.Tr("actions.runners.reset_registration_token_success"))
 	ctx.JSONRedirect(redirectTo)
 }
@@ -289,7 +284,7 @@ func ResetRunnerRegistrationToken(ctx *context.Context) {
 func RunnerDeletePost(ctx *context.Context) {
 	rCtx, err := getRunnersCtx(ctx)
 	if err != nil {
-		ctx.ServerError("getRunnersCtx", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
@@ -299,7 +294,7 @@ func RunnerDeletePost(ctx *context.Context) {
 	}
 
 	if !runner.EditableInContext(rCtx.OwnerID, rCtx.RepoID) {
-		ctx.NotFound(util.NewPermissionDeniedErrorf("no permission to delete this runner"))
+		ctx.NotFound()
 		return
 	}
 
@@ -314,6 +309,7 @@ func RunnerDeletePost(ctx *context.Context) {
 		return
 	}
 
+	audit.RecordScopedByID(ctx, runner.OwnerID, runner.RepoID, audit.RunnerRemove, "runner", runner.Name)
 	log.Info("DeleteRunnerPost success: %s", ctx.Req.URL)
 
 	ctx.Flash.Success(ctx.Tr("actions.runners.delete_runner_success"))
@@ -321,8 +317,117 @@ func RunnerDeletePost(ctx *context.Context) {
 	ctx.JSONRedirect(successRedirectTo)
 }
 
-func RedirectToDefaultSetting(ctx *context.Context) {
-	ctx.Redirect(ctx.Repo.RepoLink + "/settings/actions/runners")
+func RunnerUpdatePost(ctx *context.Context) {
+	rCtx, err := getRunnersCtx(ctx)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return
+	}
+
+	runner := findActionsRunner(ctx, rCtx)
+	if ctx.Written() {
+		return
+	}
+
+	if !runner.EditableInContext(rCtx.OwnerID, rCtx.RepoID) {
+		ctx.NotFound()
+		return
+	}
+
+	isDisabled := ctx.FormOptionalBool("disabled")
+	if !isDisabled.Has() {
+		ctx.HTTPError(http.StatusBadRequest, "missing 'disabled' parameter")
+		return
+	}
+
+	successKey := "actions.runners.enable_runner_success"
+	failedKey := "actions.runners.enable_runner_failed"
+	if isDisabled.Value() {
+		successKey = "actions.runners.disable_runner_success"
+		failedKey = "actions.runners.disable_runner_failed"
+	}
+
+	if err := actions_model.SetRunnerDisabled(ctx, runner, isDisabled.Value()); err != nil {
+		log.Warn("RunnerUpdatePost.SetRunnerDisabled failed: %v, url: %s", err, ctx.Req.URL)
+		ctx.Flash.Error(ctx.Tr(failedKey))
+		ctx.JSONRedirect("")
+		return
+	}
+	audit.RecordScopedByID(ctx, runner.OwnerID, runner.RepoID, audit.RunnerUpdate, "runner", runner.Name, "disabled", isDisabled.Value())
+
+	ctx.Flash.Success(ctx.Tr(successKey))
+	ctx.JSONRedirect("")
+}
+
+// RunnerBulkActionPost performs a bulk action (delete/disable/enable) on multiple runners.
+// Admin-only: route must be mounted inside the admin runners group; defense-in-depth check below.
+func RunnerBulkActionPost(ctx *context.Context) {
+	rCtx, err := getRunnersCtx(ctx)
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return
+	}
+
+	if !rCtx.IsAdmin {
+		ctx.HTTPError(http.StatusForbidden, "bulk actions are admin-only")
+		return
+	}
+	// ATTENTION: it completely depends on the assumption that the doer is "site admin"
+	// So it doesn't do extra permission check to the runner IDs
+	// In the future, if you need to support such operation on non-admin pages, be careful!
+	runnerIDs := ctx.FormStringInt64s("ids")
+	if len(runnerIDs) == 0 {
+		ctx.HTTPError(http.StatusBadRequest, "missing runner IDs")
+		return
+	}
+
+	action := ctx.FormString("action")
+	var successKey, failedKey string
+	switch action {
+	case "delete":
+		successKey, failedKey = "actions.runners.delete_runner_success", "actions.runners.delete_runner_failed"
+	case "disable":
+		successKey, failedKey = "actions.runners.disable_runner_success", "actions.runners.disable_runner_failed"
+	case "enable":
+		successKey, failedKey = "actions.runners.enable_runner_success", "actions.runners.enable_runner_failed"
+	default:
+		ctx.HTTPError(http.StatusBadRequest, "invalid action")
+		return
+	}
+
+	runners, err := db.Find[actions_model.ActionRunner](ctx, &actions_model.FindRunnerOptions{IDs: runnerIDs})
+	if err != nil {
+		ctx.ServerErrorAuto(err)
+		return
+	}
+
+	err = db.WithTx(ctx, func(txCtx stdctx.Context) error {
+		for _, r := range runners {
+			switch action {
+			case "delete":
+				if err := actions_model.DeleteRunner(txCtx, r.ID); err != nil {
+					return err
+				}
+				audit.RecordScopedByID(txCtx, r.OwnerID, r.RepoID, audit.RunnerRemove, "runner", r.Name)
+			case "disable", "enable":
+				disabled := action == "disable"
+				if err := actions_model.SetRunnerDisabled(txCtx, r, disabled); err != nil {
+					return err
+				}
+				audit.RecordScopedByID(txCtx, r.OwnerID, r.RepoID, audit.RunnerUpdate, "runner", r.Name, "disabled", disabled)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		log.Warn("RunnerBulkActionPost.%s failed: %v, url: %s", action, err, ctx.Req.URL)
+		ctx.Flash.Error(ctx.Tr(failedKey))
+		ctx.JSONRedirect(rCtx.RedirectLink)
+		return
+	}
+
+	ctx.Flash.Success(ctx.Tr(successKey))
+	ctx.JSONRedirect(rCtx.RedirectLink)
 }
 
 func findActionsRunner(ctx *context.Context, rCtx *runnersCtx) *actions_model.ActionRunner {
@@ -349,10 +454,10 @@ func findActionsRunner(ctx *context.Context, rCtx *runnersCtx) *actions_model.Ac
 
 	got, err := db.Find[actions_model.ActionRunner](ctx, opts)
 	if err != nil {
-		ctx.ServerError("FindRunner", err)
+		ctx.ServerErrorAuto(err)
 		return nil
 	} else if len(got) == 0 {
-		ctx.NotFound(errors.New("runner not found"))
+		ctx.NotFound()
 		return nil
 	}
 

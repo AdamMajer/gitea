@@ -5,22 +5,26 @@ package repo
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
-	"code.gitea.io/gitea/models/db"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unit"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/setting"
-	api "code.gitea.io/gitea/modules/structs"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/modules/web"
-	"code.gitea.io/gitea/routers/api/v1/utils"
-	"code.gitea.io/gitea/services/context"
-	"code.gitea.io/gitea/services/convert"
-	"code.gitea.io/gitea/services/migrations"
-	mirror_service "code.gitea.io/gitea/services/mirror"
+	audit_model "gitea.dev/models/audit"
+	"gitea.dev/models/db"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unit"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/setting"
+	api "gitea.dev/modules/structs"
+	"gitea.dev/modules/util"
+	"gitea.dev/modules/web"
+	"gitea.dev/routers/api/v1/utils"
+	"gitea.dev/services/audit"
+	"gitea.dev/services/context"
+	"gitea.dev/services/convert"
+	"gitea.dev/services/migrations"
+	mirror_service "gitea.dev/services/mirror"
 )
 
 // MirrorSync adds a mirrored repository to the sync queue
@@ -44,14 +48,12 @@ func MirrorSync(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/empty"
-	//   "403":
-	//     "$ref": "#/responses/forbidden"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
+	//   default:
+	//     "$ref": "#/responses/error"
 
 	repo := ctx.Repo.Repository
 
-	if !ctx.Repo.CanWrite(unit.TypeCode) {
+	if !ctx.Repo.Permission.CanWrite(unit.TypeCode) {
 		ctx.APIError(http.StatusForbidden, "Must have write access")
 	}
 
@@ -95,12 +97,8 @@ func PushMirrorSync(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/empty"
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "403":
-	//     "$ref": "#/responses/forbidden"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 
 	if !setting.Mirror.Enabled {
 		ctx.APIError(http.StatusBadRequest, "Mirror feature is disabled")
@@ -109,17 +107,21 @@ func PushMirrorSync(ctx *context.APIContext) {
 	// Get All push mirrors of a specific repo
 	pushMirrors, _, err := repo_model.GetPushMirrorsByRepoID(ctx, ctx.Repo.Repository.ID, db.ListOptions{})
 	if err != nil {
-		ctx.APIError(http.StatusNotFound, err)
+		ctx.APIError(http.StatusNotFound, err.Error())
 		return
 	}
+
+	failedPushMirrors := make([]string, 0)
 	for _, mirror := range pushMirrors {
 		ok := mirror_service.SyncPushMirror(ctx, mirror.ID)
 		if !ok {
-			ctx.APIErrorInternal(errors.New("error occurred when syncing push mirror " + mirror.RemoteName))
-			return
+			failedPushMirrors = append(failedPushMirrors, mirror.RemoteName)
 		}
 	}
-
+	if len(failedPushMirrors) != 0 {
+		ctx.APIError(http.StatusUnprocessableEntity, "error occurred when syncing push mirrors: "+strings.Join(failedPushMirrors, ", "))
+		return
+	}
 	ctx.Status(http.StatusOK)
 }
 
@@ -152,12 +154,8 @@ func ListPushMirrors(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/PushMirrorList"
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "403":
-	//     "$ref": "#/responses/forbidden"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 
 	if !setting.Mirror.Enabled {
 		ctx.APIError(http.StatusBadRequest, "Mirror feature is disabled")
@@ -168,7 +166,7 @@ func ListPushMirrors(ctx *context.APIContext) {
 	// Get all push mirrors for the specified repository.
 	pushMirrors, count, err := repo_model.GetPushMirrorsByRepoID(ctx, repo.ID, utils.GetListOptions(ctx))
 	if err != nil {
-		ctx.APIError(http.StatusNotFound, err)
+		ctx.APIError(http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -179,7 +177,7 @@ func ListPushMirrors(ctx *context.APIContext) {
 			responsePushMirrors = append(responsePushMirrors, m)
 		}
 	}
-	ctx.SetLinkHeader(len(responsePushMirrors), utils.GetListOptions(ctx).PageSize)
+	ctx.SetLinkHeader(int64(len(responsePushMirrors)), utils.GetListOptions(ctx).PageSize)
 	ctx.SetTotalCountHeader(count)
 	ctx.JSON(http.StatusOK, responsePushMirrors)
 }
@@ -210,12 +208,8 @@ func GetPushMirrorByName(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/PushMirror"
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "403":
-	//     "$ref": "#/responses/forbidden"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 
 	if !setting.Mirror.Enabled {
 		ctx.APIError(http.StatusBadRequest, "Mirror feature is disabled")
@@ -223,16 +217,9 @@ func GetPushMirrorByName(ctx *context.APIContext) {
 	}
 
 	mirrorName := ctx.PathParam("name")
-	// Get push mirror of a specific repo by remoteName
-	pushMirror, exist, err := db.Get[repo_model.PushMirror](ctx, repo_model.PushMirrorOptions{
-		RepoID:     ctx.Repo.Repository.ID,
-		RemoteName: mirrorName,
-	}.ToConds())
+	pushMirror, err := repo_model.GetRepoPushMirrorByRemoteName(ctx, ctx.Repo.Repository.ID, mirrorName)
 	if err != nil {
-		ctx.APIErrorInternal(err)
-		return
-	} else if !exist {
-		ctx.APIError(http.StatusNotFound, nil)
+		ctx.APIErrorAuto(err)
 		return
 	}
 
@@ -271,19 +258,20 @@ func AddPushMirror(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/PushMirror"
-	//   "403":
-	//     "$ref": "#/responses/forbidden"
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
 
 	if !setting.Mirror.Enabled {
 		ctx.APIError(http.StatusBadRequest, "Mirror feature is disabled")
 		return
 	}
 
-	pushMirror := web.GetForm(ctx).(*api.CreatePushMirrorOption)
+	if setting.Mirror.DisableNewPush {
+		ctx.APIError(http.StatusForbidden, "the site administrator has disabled the creation of new push mirrors")
+		return
+	}
+
+	pushMirror := web.GetForm[*api.CreatePushMirrorOption](ctx)
 	CreatePushMirror(ctx, pushMirror)
 }
 
@@ -313,23 +301,24 @@ func DeletePushMirrorByRemoteName(ctx *context.APIContext) {
 	// responses:
 	//   "204":
 	//     "$ref": "#/responses/empty"
-	//   "404":
-	//     "$ref": "#/responses/notFound"
-	//   "400":
+	//   default:
 	//     "$ref": "#/responses/error"
-
 	if !setting.Mirror.Enabled {
 		ctx.APIError(http.StatusBadRequest, "Mirror feature is disabled")
 		return
 	}
 
-	remoteName := ctx.PathParam("name")
-	// Delete push mirror on repo by name.
-	err := repo_model.DeletePushMirrors(ctx, repo_model.PushMirrorOptions{RepoID: ctx.Repo.Repository.ID, RemoteName: remoteName})
+	pushMirror, err := repo_model.GetRepoPushMirrorByRemoteName(ctx, ctx.Repo.Repository.ID, ctx.PathParam("name"))
 	if err != nil {
-		ctx.APIError(http.StatusNotFound, err)
+		ctx.APIErrorAuto(err)
 		return
 	}
+	err = mirror_service.DeleteRepoPushMirrorByID(ctx, ctx.Repo.Repository.ID, pushMirror.ID)
+	if err != nil {
+		ctx.APIErrorAuto(err)
+		return
+	}
+
 	ctx.Status(http.StatusNoContent)
 }
 
@@ -337,25 +326,25 @@ func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirro
 	repo := ctx.Repo.Repository
 
 	interval, err := time.ParseDuration(mirrorOption.Interval)
-	if err != nil || (interval != 0 && interval < setting.Mirror.MinInterval) {
-		ctx.APIError(http.StatusBadRequest, err)
+	if err != nil {
+		ctx.APIError(http.StatusBadRequest, fmt.Sprintf("invalid interval: %v", err))
+		return
+	}
+	if interval != 0 && interval < setting.Mirror.MinInterval {
+		ctx.APIError(http.StatusBadRequest, fmt.Sprintf("interval is shorter than minimum %v", setting.Mirror.MinInterval.String()))
 		return
 	}
 
 	address, err := git.ParseRemoteAddr(mirrorOption.RemoteAddress, mirrorOption.RemoteUsername, mirrorOption.RemotePassword)
 	if err == nil {
-		err = migrations.IsMigrateURLAllowed(address, ctx.ContextUser)
+		err = migrations.IsMigrateURLAllowed(address, ctx.Doer)
 	}
 	if err != nil {
 		HandleRemoteAddressError(ctx, err)
 		return
 	}
 
-	remoteSuffix, err := util.CryptoRandomString(10)
-	if err != nil {
-		ctx.APIErrorInternal(err)
-		return
-	}
+	remoteSuffix := util.CryptoRandomString(10)
 
 	remoteAddress, err := util.SanitizeURL(mirrorOption.RemoteAddress)
 	if err != nil {
@@ -379,13 +368,10 @@ func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirro
 
 	// if the registration of the push mirrorOption fails remove it from the database
 	if err = mirror_service.AddPushMirrorRemote(ctx, pushMirror, address); err != nil {
-		if err := repo_model.DeletePushMirrors(ctx, repo_model.PushMirrorOptions{ID: pushMirror.ID, RepoID: pushMirror.RepoID}); err != nil {
-			ctx.APIErrorInternal(err)
-			return
-		}
 		ctx.APIErrorInternal(err)
 		return
 	}
+	audit.Record(ctx, audit_model.RepositoryMirrorPushAdd, repo, "mirror_id", pushMirror.ID, "remote_address", pushMirror.RemoteAddress)
 	m, err := convert.ToPushMirror(ctx, pushMirror)
 	if err != nil {
 		ctx.APIErrorInternal(err)
@@ -395,8 +381,7 @@ func CreatePushMirror(ctx *context.APIContext, mirrorOption *api.CreatePushMirro
 }
 
 func HandleRemoteAddressError(ctx *context.APIContext, err error) {
-	if git.IsErrInvalidCloneAddr(err) {
-		addrErr := err.(*git.ErrInvalidCloneAddr)
+	if addrErr, ok := err.(*git.ErrInvalidCloneAddr); ok {
 		switch {
 		case addrErr.IsProtocolInvalid:
 			ctx.APIError(http.StatusBadRequest, "Invalid mirror protocol")

@@ -1,47 +1,56 @@
 // Copyright 2022 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-//go:generate go run invisible/generate.go -v -o ./invisible_gen.go
-
-//go:generate go run ambiguous/generate.go -v -o ./ambiguous_gen.go ambiguous/ambiguous.json
-
 package charset
 
 import (
 	"html/template"
-	"io"
-	"strings"
+	"sync"
 
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/translation"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/translation"
 )
 
-// RuneNBSP is the codepoint for NBSP
-const RuneNBSP = 0xa0
-
-// EscapeControlHTML escapes the Unicode control sequences in a provided html document
-func EscapeControlHTML(html template.HTML, locale translation.Locale, allowed ...rune) (escaped *EscapeStatus, output template.HTML) {
-	if !setting.UI.AmbiguousUnicodeDetection {
-		return &EscapeStatus{}, html
-	}
-	sb := &strings.Builder{}
-	escaped, _ = EscapeControlReader(strings.NewReader(string(html)), sb, locale, allowed...) // err has been handled in EscapeControlReader
-	return escaped, template.HTML(sb.String())
+type EscapeOptions struct {
+	Allowed map[rune]bool
 }
 
-// EscapeControlReader escapes the Unicode control sequences in a provided reader of HTML content and writer in a locale and returns the findings as an EscapeStatus
-func EscapeControlReader(reader io.Reader, writer io.Writer, locale translation.Locale, allowed ...rune) (escaped *EscapeStatus, err error) {
-	if !setting.UI.AmbiguousUnicodeDetection {
-		_, err = io.Copy(writer, reader)
-		return &EscapeStatus{}, err
-	}
-	outputStream := &HTMLStreamerWriter{Writer: writer}
-	streamer := NewEscapeStreamer(locale, outputStream, allowed...).(*escapeStreamer)
+func AllowRuneNBSP() map[rune]bool {
+	return map[rune]bool{0xa0: true}
+}
 
-	if err = StreamHTML(reader, streamer); err != nil {
-		streamer.escaped.HasError = true
-		log.Error("Error whilst escaping: %v", err)
+func EscapeOptionsForView() EscapeOptions {
+	return EscapeOptions{
+		// it's safe to see NBSP in the view, but maybe not in the diff
+		Allowed: AllowRuneNBSP(),
 	}
-	return streamer.escaped, err
+}
+
+var asciiSafeBytes = sync.OnceValue(func() (ret [256]bool) {
+	for c := range ret {
+		ret[c] = (c >= 0x20 && c < 0x7f) || c == '\t' || c == '\n'
+	}
+	return ret
+})
+
+func isStringAsciiSafe(str string) bool {
+	safeBytes := asciiSafeBytes()
+	for i := range len(str) {
+		if !safeBytes[str[i]] {
+			return false
+		}
+	}
+	return true
+}
+
+// EscapeControlHTML escapes the Unicode control sequences in a provided html document, in memory as views render the EscapeStatus first
+func EscapeControlHTML(html template.HTML, locale translation.Locale, opts ...EscapeOptions) (escaped *EscapeStatus, output template.HTML) {
+	if !setting.UI.AmbiguousUnicodeDetection || isStringAsciiSafe(string(html)) {
+		return &EscapeStatus{}, html
+	}
+	escaper := &htmlEscaper{escaped: &EscapeStatus{}, locale: locale, ambiguousTables: AmbiguousTablesForLocale(locale)}
+	if len(opts) > 0 {
+		escaper.allowed = opts[0].Allowed
+	}
+	return escaper.escaped, template.HTML(escaper.escape(string(html)))
 }

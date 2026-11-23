@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"runtime"
 
-	"code.gitea.io/gitea/modules/process"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/modules/process"
+	"gitea.dev/modules/setting"
+	"gitea.dev/services/context"
 )
 
 func monitorTraceCommon(ctx *context.Context) {
-	ctx.Data["Title"] = ctx.Tr("admin.monitor")
+	ctx.Data["Title"] = ctx.Tr("admin.monitor.trace")
 	ctx.Data["PageIsAdminMonitorTrace"] = true
 	// Hide the performance trace tab in production, because it shows a lot of SQLs and is not that useful for end users.
 	// To avoid confusing end users, do not let them know this tab. End users should "download diagnosis report" instead.
@@ -34,7 +34,7 @@ func Stacktrace(ctx *context.Context) {
 		showNoSystem := show == "process"
 		processStacks, processCount, _, err := process.GetManager().ProcessStacktraces(false, showNoSystem)
 		if err != nil {
-			ctx.ServerError("GoroutineStacktrace", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 

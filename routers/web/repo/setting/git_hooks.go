@@ -6,8 +6,9 @@ package setting
 import (
 	"net/http"
 
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/services/context"
+	"gitea.dev/modules/git"
+	"gitea.dev/routers/web/repo"
+	"gitea.dev/services/context"
 )
 
 // GitHooks hooks of a repository
@@ -15,9 +16,9 @@ func GitHooks(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("repo.settings.githooks")
 	ctx.Data["PageIsSettingsGitHooks"] = true
 
-	hooks, err := ctx.Repo.GitRepo.Hooks()
+	hooks, err := git.ListHooks(ctx.Repo.GitRepo)
 	if err != nil {
-		ctx.ServerError("Hooks", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Data["Hooks"] = hooks
@@ -31,34 +32,27 @@ func GitHooksEdit(ctx *context.Context) {
 	ctx.Data["PageIsSettingsGitHooks"] = true
 
 	name := ctx.PathParam("name")
-	hook, err := ctx.Repo.GitRepo.GetHook(name)
+	hook, err := git.GetHook(ctx.Repo.GitRepo, name)
 	if err != nil {
-		if err == git.ErrNotValidHook {
-			ctx.NotFound(err)
-		} else {
-			ctx.ServerError("GetHook", err)
-		}
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Data["Hook"] = hook
+	ctx.Data["CodeEditorConfig"] = repo.CodeEditorConfig{Filename: name + ".sh", IndentStyle: "tab", TabWidth: 4}
 	ctx.HTML(http.StatusOK, tplGithookEdit)
 }
 
 // GitHooksEditPost response for editing a git hook of a repository
 func GitHooksEditPost(ctx *context.Context) {
 	name := ctx.PathParam("name")
-	hook, err := ctx.Repo.GitRepo.GetHook(name)
+	hook, err := git.GetHook(ctx.Repo.GitRepo, name)
 	if err != nil {
-		if err == git.ErrNotValidHook {
-			ctx.NotFound(err)
-		} else {
-			ctx.ServerError("GetHook", err)
-		}
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	hook.Content = ctx.FormString("content")
 	if err = hook.Update(); err != nil {
-		ctx.ServerError("hook.Update", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/settings/hooks/git")

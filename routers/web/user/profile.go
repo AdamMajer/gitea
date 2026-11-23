@@ -5,29 +5,24 @@
 package user
 
 import (
-	"fmt"
 	"net/http"
-	"path"
-	"strings"
 
-	activities_model "code.gitea.io/gitea/models/activities"
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/models/organization"
-	"code.gitea.io/gitea/models/renderhelper"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/git"
-	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/markup/markdown"
-	"code.gitea.io/gitea/modules/optional"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/templates"
-	"code.gitea.io/gitea/modules/util"
-	"code.gitea.io/gitea/routers/web/feed"
-	"code.gitea.io/gitea/routers/web/org"
-	shared_user "code.gitea.io/gitea/routers/web/shared/user"
-	"code.gitea.io/gitea/services/context"
-	feed_service "code.gitea.io/gitea/services/feed"
+	activities_model "gitea.dev/models/activities"
+	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
+	"gitea.dev/models/renderhelper"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/git"
+	"gitea.dev/modules/log"
+	"gitea.dev/modules/markup/markdown"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/templates"
+	"gitea.dev/routers/web/org"
+	shared_user "gitea.dev/routers/web/shared/user"
+	"gitea.dev/services/context"
+	feed_service "gitea.dev/services/feed"
 )
 
 const (
@@ -37,15 +32,7 @@ const (
 
 // OwnerProfile render profile page for a user or a organization (aka, repo owner)
 func OwnerProfile(ctx *context.Context) {
-	if strings.Contains(ctx.Req.Header.Get("Accept"), "application/rss+xml") {
-		feed.ShowUserFeedRSS(ctx)
-		return
-	}
-	if strings.Contains(ctx.Req.Header.Get("Accept"), "application/atom+xml") {
-		feed.ShowUserFeedAtom(ctx)
-		return
-	}
-
+	// HINT: USER-TYPE-GLOSSARY: in the future it needs to handle more user types correctly
 	if ctx.ContextUser.IsOrganization() {
 		org.Home(ctx)
 	} else {
@@ -54,12 +41,6 @@ func OwnerProfile(ctx *context.Context) {
 }
 
 func userProfile(ctx *context.Context) {
-	// check view permissions
-	if !user_model.IsUserVisibleToViewer(ctx, ctx.ContextUser, ctx.Doer) {
-		ctx.NotFound(fmt.Errorf("%s", ctx.ContextUser.Name))
-		return
-	}
-
 	ctx.Data["Title"] = ctx.ContextUser.DisplayName()
 	ctx.Data["PageIsUserProfile"] = true
 
@@ -72,7 +53,7 @@ func userProfile(ctx *context.Context) {
 	// and the "profile readme" related logic also duplicates in both of FindOwnerProfileReadme and RenderUserOrgHeader
 	// TODO: it is a bad design and should be refactored later,
 	if _, err := shared_user.RenderUserOrgHeader(ctx); err != nil {
-		ctx.ServerError("RenderUserOrgHeader", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.HTML(http.StatusOK, tplProfile)
@@ -102,7 +83,8 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 	var (
 		repos   []*repo_model.Repository
 		count   int64
-		total   int
+		total   int64
+		curRows int
 		orderBy db.SearchOrderBy
 	)
 
@@ -124,7 +106,7 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 		Page:     page,
 	})
 	if err != nil {
-		ctx.ServerError("GetUserFollowers", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Data["NumFollowers"] = numFollowers
@@ -133,7 +115,7 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 		Page:     page,
 	})
 	if err != nil {
-		ctx.ServerError("GetUserFollowing", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 	ctx.Data["NumFollowing"] = numFollowing
@@ -156,26 +138,20 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 	switch tab {
 	case "followers":
 		ctx.Data["Cards"] = followers
-		total = int(numFollowers)
+		total = numFollowers
 	case "following":
 		ctx.Data["Cards"] = following
-		total = int(numFollowing)
+		total = numFollowing
 	case "activity":
-		// prepare heatmap data
-		if setting.Service.EnableUserHeatmap {
-			data, err := activities_model.GetUserHeatmapDataByUser(ctx, ctx.ContextUser, ctx.Doer)
-			if err != nil {
-				ctx.ServerError("GetUserHeatmapDataByUser", err)
-				return
-			}
-			ctx.Data["HeatmapData"] = data
-			ctx.Data["HeatmapTotalContributions"] = activities_model.GetTotalContributionsInHeatmap(data)
+		if setting.Service.EnableUserHeatmap && activities_model.ActivityReadable(ctx.ContextUser, ctx.Doer) {
+			ctx.Data["EnableHeatmap"] = true
+			ctx.Data["HeatmapURL"] = ctx.ContextUser.HomeLink() + "/-/heatmap"
 		}
 
 		date := ctx.FormString("date")
 		pagingNum = setting.UI.FeedPagingNum
 		showPrivate := ctx.IsSigned && (ctx.Doer.IsAdmin || ctx.Doer.ID == ctx.ContextUser.ID)
-		items, count, err := feed_service.GetFeeds(ctx, activities_model.GetFeedsOptions{
+		items, feedCount, err := feed_service.GetFeedsForDashboard(ctx, activities_model.GetFeedsOptions{
 			RequestedUser:   ctx.ContextUser,
 			Actor:           ctx.Doer,
 			IncludePrivate:  showPrivate,
@@ -188,13 +164,13 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 			},
 		})
 		if err != nil {
-			ctx.ServerError("GetFeeds", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 		ctx.Data["Feeds"] = items
 		ctx.Data["Date"] = date
-
-		total = int(count)
+		curRows = len(items)
+		total = feedCount
 	case "stars":
 		ctx.Data["PageIsProfileStarList"] = true
 		ctx.Data["ShowRepoOwnerOnList"] = true
@@ -219,11 +195,11 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 			IsPrivate:          private,
 		})
 		if err != nil {
-			ctx.ServerError("SearchRepository", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
-		total = int(count)
+		total = count
 	case "watching":
 		repos, count, err = repo_model.SearchRepository(ctx, repo_model.SearchRepoOptions{
 			ListOptions: db.ListOptions{
@@ -246,17 +222,17 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 			IsPrivate:          private,
 		})
 		if err != nil {
-			ctx.ServerError("SearchRepository", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
-		total = int(count)
+		total = count
 	case "overview":
-		if bytes, err := profileReadme.GetBlobContent(setting.UI.MaxDisplayFileSize); err != nil {
+		if bytes, err := profileReadme.GetBlobContent(ctx, setting.UI.MaxDisplayFileSize); err != nil {
 			log.Error("failed to GetBlobContent: %v", err)
 		} else {
 			rctx := renderhelper.NewRenderContextRepoFile(ctx, profileDbRepo, renderhelper.RepoFileOptions{
-				CurrentRefPath: path.Join("branch", util.PathEscapeSegments(profileDbRepo.DefaultBranch)),
+				CurrentRefSubURL: git.RefNameFromBranch(profileDbRepo.DefaultBranch).RefWebLinkPath(),
 			})
 			if profileContent, err := markdown.RenderString(rctx, bytes); err != nil {
 				log.Error("failed to RenderString: %v", err)
@@ -274,11 +250,15 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 			},
 		})
 		if err != nil {
-			ctx.ServerError("GetUserOrganizations", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
-		ctx.Data["Cards"] = orgs
-		total = int(count)
+		cards := make([]*user_model.User, 0, len(orgs))
+		for _, org := range orgs {
+			cards = append(cards, org.AsUser())
+		}
+		ctx.Data["Cards"] = cards // user_cards needs User-only methods
+		total = count
 	default: // default to "repositories"
 		repos, count, err = repo_model.SearchRepository(ctx, repo_model.SearchRepoOptions{
 			ListOptions: db.ListOptions{
@@ -301,22 +281,25 @@ func prepareUserProfileTabData(ctx *context.Context, profileDbRepo *repo_model.R
 			IsPrivate:          private,
 		})
 		if err != nil {
-			ctx.ServerError("SearchRepository", err)
+			ctx.ServerErrorAuto(err)
 			return
 		}
 
-		total = int(count)
+		total = count
 	}
 	ctx.Data["Repos"] = repos
 	ctx.Data["Total"] = total
 
 	if _, err := shared_user.RenderUserOrgHeader(ctx); err != nil {
-		ctx.ServerError("RenderUserOrgHeader", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
 
-	pager := context.NewPagination(total, pagingNum, page, 5)
-	pager.AddParamFromRequest(ctx.Req)
+	pager := context.NewPagerBuilder(ctx).TotalCount(total).PerPageLimit(pagingNum).CurPage(page).Build()
+	if tab == "activity" {
+		// FIXME: UNLIMITE-PAGING-ONE-MORE-ROW: see another comment
+		pager.WithUnlimitedPaging(curRows, curRows == pagingNum)
+	}
 	ctx.Data["Page"] = pager
 }
 
@@ -329,25 +312,22 @@ func ActionUserFollow(ctx *context.Context) {
 	case "unfollow":
 		err = user_model.UnfollowUser(ctx, ctx.Doer.ID, ctx.ContextUser.ID)
 	}
-
 	if err != nil {
-		log.Error("Failed to apply action %q: %v", ctx.FormString("action"), err)
-		ctx.HTTPError(http.StatusBadRequest, fmt.Sprintf("Action %q failed", ctx.FormString("action")))
+		ctx.ServerErrorAuto(err)
 		return
 	}
+
 	if _, err := shared_user.RenderUserOrgHeader(ctx); err != nil {
-		ctx.ServerError("RenderUserOrgHeader", err)
+		ctx.ServerErrorAuto(err)
 		return
 	}
-	if ctx.ContextUser.IsIndividual() {
-		ctx.HTML(http.StatusOK, tplProfileBigAvatar)
-		return
-	} else if ctx.ContextUser.IsOrganization() {
+
+	// HINT: USER-TYPE-GLOSSARY: follow the logic in OwnerProfile
+	if ctx.ContextUser.IsOrganization() {
 		ctx.Data["Org"] = ctx.ContextUser
-		ctx.Data["IsFollowing"] = ctx.Doer != nil && user_model.IsFollowing(ctx, ctx.Doer.ID, ctx.ContextUser.ID)
+		ctx.Data["IsFollowing"] = user_model.IsFollowing(ctx, ctx.Doer.ID, ctx.ContextUser.ID)
 		ctx.HTML(http.StatusOK, tplFollowUnfollow)
-		return
+	} else {
+		ctx.HTML(http.StatusOK, tplProfileBigAvatar)
 	}
-	log.Error("Failed to apply action %q: unsupported context user type: %s", ctx.FormString("action"), ctx.ContextUser.Type)
-	ctx.HTTPError(http.StatusBadRequest, fmt.Sprintf("Action %q failed", ctx.FormString("action")))
 }

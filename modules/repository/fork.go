@@ -6,10 +6,10 @@ package repository
 import (
 	"context"
 
-	"code.gitea.io/gitea/models/organization"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/setting"
+	"gitea.dev/models/organization"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/setting"
 )
 
 // CanUserForkBetweenOwners returns true if user can fork between owners.
@@ -35,7 +35,7 @@ func CanUserForkRepo(ctx context.Context, user *user_model.User, repo *repo_mode
 		return false, err
 	}
 	for _, org := range ownedOrgs {
-		if repo.OwnerID != org.ID && !repo_model.HasForkedRepo(ctx, org.ID, repo.ID) {
+		if CanUserForkBetweenOwners(repo.OwnerID, org.ID) && !repo_model.HasForkedRepo(ctx, org.ID, repo.ID) {
 			return true, nil
 		}
 	}

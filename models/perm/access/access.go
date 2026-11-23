@@ -8,13 +8,13 @@ import (
 	"context"
 	"fmt"
 
-	"code.gitea.io/gitea/models/db"
-	"code.gitea.io/gitea/models/organization"
-	"code.gitea.io/gitea/models/perm"
-	repo_model "code.gitea.io/gitea/models/repo"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/setting"
-	"code.gitea.io/gitea/modules/structs"
+	"gitea.dev/models/db"
+	"gitea.dev/models/organization"
+	"gitea.dev/models/perm"
+	repo_model "gitea.dev/models/repo"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/structs"
 
 	"xorm.io/builder"
 )
@@ -25,7 +25,7 @@ import (
 type Access struct {
 	ID     int64 `xorm:"pk autoincr"`
 	UserID int64 `xorm:"UNIQUE(s)"`
-	RepoID int64 `xorm:"UNIQUE(s)"`
+	RepoID int64 `xorm:"UNIQUE(s) INDEX"`
 	Mode   perm.AccessMode
 }
 
@@ -33,7 +33,9 @@ func init() {
 	db.RegisterModel(new(Access))
 }
 
-func accessLevel(ctx context.Context, user *user_model.User, repo *repo_model.Repository) (perm.AccessMode, error) {
+// modeByOwnerAndAccess returns the access mode of a user to a repository,
+// considering: the repository's owner (visibility and doer restriction), any explicit "access" records.
+func modeByOwnerAndAccess(ctx context.Context, user *user_model.User, repo *repo_model.Repository) (perm.AccessMode, error) {
 	mode := perm.AccessModeNone
 	var userID int64
 	restricted := false
@@ -69,14 +71,6 @@ func accessLevel(ctx context.Context, user *user_model.User, repo *repo_model.Re
 	return a.Mode, nil
 }
 
-func maxAccessMode(modes ...perm.AccessMode) perm.AccessMode {
-	maxMode := perm.AccessModeNone
-	for _, mode := range modes {
-		maxMode = max(maxMode, mode)
-	}
-	return maxMode
-}
-
 type userAccess struct {
 	User *user_model.User
 	Mode perm.AccessMode
@@ -85,49 +79,86 @@ type userAccess struct {
 // updateUserAccess updates an access map so that user has at least mode
 func updateUserAccess(accessMap map[int64]*userAccess, user *user_model.User, mode perm.AccessMode) {
 	if ua, ok := accessMap[user.ID]; ok {
-		ua.Mode = maxAccessMode(ua.Mode, mode)
+		ua.Mode = max(ua.Mode, mode)
 	} else {
 		accessMap[user.ID] = &userAccess{User: user, Mode: mode}
 	}
 }
 
-// FIXME: do cross-comparison so reduce deletions and additions to the minimum?
+// refreshAccesses updates the repository's access records in the database by comparing the provided accessMap
+// with existing records. It minimizes DB operations by performing selective inserts, updates, and deletes
+// instead of removing all existing records and re-adding them.
 func refreshAccesses(ctx context.Context, repo *repo_model.Repository, accessMap map[int64]*userAccess) (err error) {
-	minMode := perm.AccessModeRead
+	minModeToKeep := perm.AccessModeRead
 	if err := repo.LoadOwner(ctx); err != nil {
 		return fmt.Errorf("LoadOwner: %w", err)
 	}
 
-	// If the repo isn't private and isn't owned by a organization,
+	// If the repo isn't private and isn't owned by an organization,
 	// increase the minMode to Write.
 	if !repo.IsPrivate && !repo.Owner.IsOrganization() {
-		minMode = perm.AccessModeWrite
+		minModeToKeep = perm.AccessModeWrite
 	}
 
-	newAccesses := make([]Access, 0, len(accessMap))
+	// Query existing accesses for cross-comparison
+	var existingAccesses []Access
+	if err := db.GetEngine(ctx).Where(builder.Eq{"repo_id": repo.ID}).Find(&existingAccesses); err != nil {
+		return fmt.Errorf("find existing accesses: %w", err)
+	}
+	existingMap := make(map[int64]perm.AccessMode, len(existingAccesses))
+	for _, a := range existingAccesses {
+		existingMap[a.UserID] = a.Mode
+	}
+
+	var toDelete []int64
+	var toInsert, toUpdate []Access
+
+	// Determine changes
 	for userID, ua := range accessMap {
-		if ua.Mode < minMode && !ua.User.IsRestricted {
-			continue
+		if ua.Mode < minModeToKeep && !ua.User.IsRestricted {
+			// No explicit access record needed (handled by default permissions, e.g., public repo access)
+			if _, exists := existingMap[userID]; exists {
+				toDelete = append(toDelete, userID)
+			}
+		} else {
+			desiredMode := ua.Mode
+			if existingMode, exists := existingMap[userID]; exists {
+				if existingMode != desiredMode {
+					toUpdate = append(toUpdate, Access{UserID: userID, RepoID: repo.ID, Mode: desiredMode})
+				}
+			} else {
+				toInsert = append(toInsert, Access{UserID: userID, RepoID: repo.ID, Mode: desiredMode})
+			}
 		}
-
-		newAccesses = append(newAccesses, Access{
-			UserID: userID,
-			RepoID: repo.ID,
-			Mode:   ua.Mode,
-		})
+		delete(existingMap, userID)
 	}
 
-	// Delete old accesses and insert new ones for repository.
-	if _, err = db.DeleteByBean(ctx, &Access{RepoID: repo.ID}); err != nil {
-		return fmt.Errorf("delete old accesses: %w", err)
-	}
-	if len(newAccesses) == 0 {
-		return nil
+	// Remaining in existingMap should be deleted
+	for userID := range existingMap {
+		toDelete = append(toDelete, userID)
 	}
 
-	if err = db.Insert(ctx, newAccesses); err != nil {
-		return fmt.Errorf("insert new accesses: %w", err)
+	// Execute deletions
+	if len(toDelete) > 0 {
+		if _, err = db.GetEngine(ctx).In("user_id", toDelete).And("repo_id = ?", repo.ID).Delete(&Access{}); err != nil {
+			return fmt.Errorf("delete accesses: %w", err)
+		}
 	}
+
+	// Execute updates
+	for _, u := range toUpdate {
+		if _, err = db.GetEngine(ctx).Where("user_id = ? AND repo_id = ?", u.UserID, repo.ID).Cols("mode").Update(&Access{Mode: u.Mode}); err != nil {
+			return fmt.Errorf("update access for user %d: %w", u.UserID, err)
+		}
+	}
+
+	// Execute insertions
+	if len(toInsert) > 0 {
+		if err = db.Insert(ctx, toInsert); err != nil {
+			return fmt.Errorf("insert new accesses: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -193,30 +224,32 @@ func RecalculateTeamAccesses(ctx context.Context, repo *repo_model.Repository, i
 
 // RecalculateUserAccess recalculates new access for a single user
 // Usable if we know access only affected one user
-func RecalculateUserAccess(ctx context.Context, repo *repo_model.Repository, uid int64) (err error) {
+func RecalculateUserAccess(ctx context.Context, repo *repo_model.Repository, user *user_model.User) (err error) {
+	if err = repo.LoadOwner(ctx); err != nil {
+		return err
+	}
+
 	minMode := perm.AccessModeRead
-	if !repo.IsPrivate {
+	if !repo.IsPrivate && !repo.Owner.IsOrganization() && !user.IsRestricted {
 		minMode = perm.AccessModeWrite
 	}
 
 	accessMode := perm.AccessModeNone
 	e := db.GetEngine(ctx)
-	collaborator, err := repo_model.GetCollaboration(ctx, repo.ID, uid)
+	collaborator, err := repo_model.GetCollaboration(ctx, repo.ID, user.ID)
 	if err != nil {
 		return err
 	} else if collaborator != nil {
 		accessMode = collaborator.Mode
 	}
 
-	if err = repo.LoadOwner(ctx); err != nil {
-		return err
-	} else if repo.Owner.IsOrganization() {
+	if repo.Owner.IsOrganization() {
 		var teams []organization.Team
 		if err := e.Join("INNER", "team_repo", "team_repo.team_id = team.id").
 			Join("INNER", "team_user", "team_user.team_id = team.id").
 			Where("team.org_id = ?", repo.OwnerID).
 			And("team_repo.repo_id=?", repo.ID).
-			And("team_user.uid=?", uid).
+			And("team_user.uid=?", user.ID).
 			Find(&teams); err != nil {
 			return err
 		}
@@ -226,15 +259,15 @@ func RecalculateUserAccess(ctx context.Context, repo *repo_model.Repository, uid
 				t.AccessMode = perm.AccessModeOwner
 			}
 
-			accessMode = maxAccessMode(accessMode, t.AccessMode)
+			accessMode = max(accessMode, t.AccessMode)
 		}
 	}
 
 	// Delete old user accesses and insert new one for repository.
-	if _, err = e.Delete(&Access{RepoID: repo.ID, UserID: uid}); err != nil {
+	if _, err = e.Delete(&Access{RepoID: repo.ID, UserID: user.ID}); err != nil {
 		return fmt.Errorf("delete old user accesses: %w", err)
 	} else if accessMode >= minMode {
-		if err = db.Insert(ctx, &Access{RepoID: repo.ID, UserID: uid, Mode: accessMode}); err != nil {
+		if err = db.Insert(ctx, &Access{RepoID: repo.ID, UserID: user.ID, Mode: accessMode}); err != nil {
 			return fmt.Errorf("insert new user accesses: %w", err)
 		}
 	}

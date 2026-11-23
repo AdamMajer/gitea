@@ -4,29 +4,62 @@
 package issues_test
 
 import (
+	"strings"
 	"testing"
+	"time"
 
-	"code.gitea.io/gitea/models/db"
-	issues_model "code.gitea.io/gitea/models/issues"
-	repo_model "code.gitea.io/gitea/models/repo"
-	"code.gitea.io/gitea/models/unittest"
-	user_model "code.gitea.io/gitea/models/user"
-	"code.gitea.io/gitea/modules/setting"
+	"gitea.dev/models/db"
+	issues_model "gitea.dev/models/issues"
+	repo_model "gitea.dev/models/repo"
+	"gitea.dev/models/unittest"
+	user_model "gitea.dev/models/user"
+	"gitea.dev/modules/optional"
+	"gitea.dev/modules/setting"
+	"gitea.dev/modules/test"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestPullRequest_LoadAttributes(t *testing.T) {
+func TestPullRequest(t *testing.T) {
 	assert.NoError(t, unittest.PrepareTestDatabase())
+
+	t.Run("LoadAttributes", testPullRequestLoadAttributes)
+	t.Run("LoadIssue", testPullRequestLoadIssue)
+	t.Run("LoadBaseRepo", testPullRequestLoadBaseRepo)
+	t.Run("LoadHeadRepo", testPullRequestLoadHeadRepo)
+	t.Run("PullRequestsNewest", testPullRequestsNewest)
+	t.Run("PullRequestsOldest", testPullRequestsOldest)
+	t.Run("GetUnmergedPullRequest", testGetUnmergedPullRequest)
+	t.Run("HasUnmergedPullRequestsByHeadInfo", testHasUnmergedPullRequestsByHeadInfo)
+	t.Run("GetUnmergedPullRequestsByHeadInfo", testGetUnmergedPullRequestsByHeadInfo)
+	t.Run("GetUnmergedPullRequestsByBaseInfo", testGetUnmergedPullRequestsByBaseInfo)
+	t.Run("GetPullRequestByIndex", testGetPullRequestByIndex)
+	t.Run("GetPullRequestByID", testGetPullRequestByID)
+	t.Run("GetPullRequestByIssueID", testGetPullRequestByIssueID)
+	t.Run("PullRequest_UpdateCols", testPullRequestUpdateCols)
+	t.Run("PullRequest_IsWorkInProgress", testPullRequestIsWorkInProgress)
+	t.Run("PullRequest_GetWorkInProgressPrefixWorkInProgress", testPullRequestGetWorkInProgressPrefixWorkInProgress)
+	t.Run("DeleteOrphanedObjects", testDeleteOrphanedObjects)
+	t.Run("ParseCodeOwnersLine", testParseCodeOwnersLine)
+	t.Run("CodeOwnerAbsolutePathPatterns", testCodeOwnerAbsolutePathPatterns)
+	t.Run("CodeOwnerPatternMatchTimeout", testCodeOwnerPatternMatchTimeout)
+	t.Run("CodeOwnerSectionsAndAnnotations", testCodeOwnerSectionsAndAnnotations)
+	t.Run("GetApprovers", testGetApprovers)
+	t.Run("GetPullRequestByMergedCommit", testGetPullRequestByMergedCommit)
+	t.Run("Migrate_InsertPullRequests", testMigrateInsertPullRequests)
+	t.Run("PullRequestsClosedRecentSortType", testPullRequestsClosedRecentSortType)
+	t.Run("LoadRequestedReviewers", testLoadRequestedReviewers)
+}
+
+func testPullRequestLoadAttributes(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
 	assert.NoError(t, pr.LoadAttributes(t.Context()))
 	assert.NotNil(t, pr.Merger)
 	assert.Equal(t, pr.MergerID, pr.Merger.ID)
 }
 
-func TestPullRequest_LoadIssue(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestLoadIssue(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
 	assert.NoError(t, pr.LoadIssue(t.Context()))
 	assert.NotNil(t, pr.Issue)
@@ -36,8 +69,7 @@ func TestPullRequest_LoadIssue(t *testing.T) {
 	assert.Equal(t, int64(2), pr.Issue.ID)
 }
 
-func TestPullRequest_LoadBaseRepo(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestLoadBaseRepo(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
 	assert.NoError(t, pr.LoadBaseRepo(t.Context()))
 	assert.NotNil(t, pr.BaseRepo)
@@ -47,8 +79,7 @@ func TestPullRequest_LoadBaseRepo(t *testing.T) {
 	assert.Equal(t, pr.BaseRepoID, pr.BaseRepo.ID)
 }
 
-func TestPullRequest_LoadHeadRepo(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestLoadHeadRepo(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1})
 	assert.NoError(t, pr.LoadHeadRepo(t.Context()))
 	assert.NotNil(t, pr.HeadRepo)
@@ -59,13 +90,12 @@ func TestPullRequest_LoadHeadRepo(t *testing.T) {
 
 // TODO TestNewPullRequest
 
-func TestPullRequestsNewest(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestsNewest(t *testing.T) {
 	prs, count, err := issues_model.PullRequests(t.Context(), 1, &issues_model.PullRequestsOptions{
 		ListOptions: db.ListOptions{
 			Page: 1,
 		},
-		State:    "open",
+		IsClosed: optional.Some(false),
 		SortType: "newest",
 	})
 	assert.NoError(t, err)
@@ -77,7 +107,7 @@ func TestPullRequestsNewest(t *testing.T) {
 	}
 }
 
-func TestPullRequests_Closed_RecentSortType(t *testing.T) {
+func testPullRequestsClosedRecentSortType(t *testing.T) {
 	// Issue ID | Closed At.  | Updated At
 	//    2     | 1707270001  | 1707270001
 	//    3     | 1707271000  | 1707279999
@@ -90,7 +120,6 @@ func TestPullRequests_Closed_RecentSortType(t *testing.T) {
 		{"recentclose", []int64{11, 3, 2}},
 	}
 
-	assert.NoError(t, unittest.PrepareTestDatabase())
 	_, err := db.Exec(t.Context(), "UPDATE issue SET closed_unix = 1707270001, updated_unix = 1707270001, is_closed = true WHERE id = 2")
 	require.NoError(t, err)
 	_, err = db.Exec(t.Context(), "UPDATE issue SET closed_unix = 1707271000, updated_unix = 1707279999, is_closed = true WHERE id = 3")
@@ -104,7 +133,7 @@ func TestPullRequests_Closed_RecentSortType(t *testing.T) {
 				ListOptions: db.ListOptions{
 					Page: 1,
 				},
-				State:    "closed",
+				IsClosed: optional.Some(true),
 				SortType: test.sortType,
 			})
 			require.NoError(t, err)
@@ -118,9 +147,7 @@ func TestPullRequests_Closed_RecentSortType(t *testing.T) {
 	}
 }
 
-func TestLoadRequestedReviewers(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
-
+func testLoadRequestedReviewers(t *testing.T) {
 	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 2})
 	assert.NoError(t, pull.LoadIssue(t.Context()))
 	issue := pull.Issue
@@ -146,13 +173,12 @@ func TestLoadRequestedReviewers(t *testing.T) {
 	assert.Empty(t, pull.RequestedReviewers)
 }
 
-func TestPullRequestsOldest(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestsOldest(t *testing.T) {
 	prs, count, err := issues_model.PullRequests(t.Context(), 1, &issues_model.PullRequestsOptions{
 		ListOptions: db.ListOptions{
 			Page: 1,
 		},
-		State:    "open",
+		IsClosed: optional.Some(false),
 		SortType: "oldest",
 	})
 	assert.NoError(t, err)
@@ -164,8 +190,7 @@ func TestPullRequestsOldest(t *testing.T) {
 	}
 }
 
-func TestGetUnmergedPullRequest(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetUnmergedPullRequest(t *testing.T) {
 	pr, err := issues_model.GetUnmergedPullRequest(t.Context(), 1, 1, "branch2", "master", issues_model.PullRequestFlowGithub)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), pr.ID)
@@ -175,9 +200,7 @@ func TestGetUnmergedPullRequest(t *testing.T) {
 	assert.True(t, issues_model.IsErrPullRequestNotExist(err))
 }
 
-func TestHasUnmergedPullRequestsByHeadInfo(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
-
+func testHasUnmergedPullRequestsByHeadInfo(t *testing.T) {
 	exist, err := issues_model.HasUnmergedPullRequestsByHeadInfo(t.Context(), 1, "branch2")
 	assert.NoError(t, err)
 	assert.True(t, exist)
@@ -187,8 +210,7 @@ func TestHasUnmergedPullRequestsByHeadInfo(t *testing.T) {
 	assert.False(t, exist)
 }
 
-func TestGetUnmergedPullRequestsByHeadInfo(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetUnmergedPullRequestsByHeadInfo(t *testing.T) {
 	prs, err := issues_model.GetUnmergedPullRequestsByHeadInfo(t.Context(), 1, "branch2")
 	assert.NoError(t, err)
 	assert.Len(t, prs, 1)
@@ -198,8 +220,7 @@ func TestGetUnmergedPullRequestsByHeadInfo(t *testing.T) {
 	}
 }
 
-func TestGetUnmergedPullRequestsByBaseInfo(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetUnmergedPullRequestsByBaseInfo(t *testing.T) {
 	prs, err := issues_model.GetUnmergedPullRequestsByBaseInfo(t.Context(), 1, "master")
 	assert.NoError(t, err)
 	assert.Len(t, prs, 1)
@@ -209,8 +230,7 @@ func TestGetUnmergedPullRequestsByBaseInfo(t *testing.T) {
 	assert.Equal(t, "master", pr.BaseBranch)
 }
 
-func TestGetPullRequestByIndex(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetPullRequestByIndex(t *testing.T) {
 	pr, err := issues_model.GetPullRequestByIndex(t.Context(), 1, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), pr.BaseRepoID)
@@ -225,8 +245,7 @@ func TestGetPullRequestByIndex(t *testing.T) {
 	assert.True(t, issues_model.IsErrPullRequestNotExist(err))
 }
 
-func TestGetPullRequestByID(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetPullRequestByID(t *testing.T) {
 	pr, err := issues_model.GetPullRequestByID(t.Context(), 1)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(1), pr.ID)
@@ -237,8 +256,7 @@ func TestGetPullRequestByID(t *testing.T) {
 	assert.True(t, issues_model.IsErrPullRequestNotExist(err))
 }
 
-func TestGetPullRequestByIssueID(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetPullRequestByIssueID(t *testing.T) {
 	pr, err := issues_model.GetPullRequestByIssueID(t.Context(), 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(2), pr.IssueID)
@@ -248,8 +266,7 @@ func TestGetPullRequestByIssueID(t *testing.T) {
 	assert.True(t, issues_model.IsErrPullRequestNotExist(err))
 }
 
-func TestPullRequest_UpdateCols(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testPullRequestUpdateCols(t *testing.T) {
 	pr := &issues_model.PullRequest{
 		ID:         1,
 		BaseBranch: "baseBranch",
@@ -265,9 +282,7 @@ func TestPullRequest_UpdateCols(t *testing.T) {
 
 // TODO TestAddTestPullRequestTask
 
-func TestPullRequest_IsWorkInProgress(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
-
+func testPullRequestIsWorkInProgress(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 2})
 	pr.LoadIssue(t.Context())
 
@@ -280,9 +295,7 @@ func TestPullRequest_IsWorkInProgress(t *testing.T) {
 	assert.True(t, pr.IsWorkInProgress(t.Context()))
 }
 
-func TestPullRequest_GetWorkInProgressPrefixWorkInProgress(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
-
+func testPullRequestGetWorkInProgressPrefixWorkInProgress(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 2})
 	pr.LoadIssue(t.Context())
 
@@ -296,9 +309,7 @@ func TestPullRequest_GetWorkInProgressPrefixWorkInProgress(t *testing.T) {
 	assert.Equal(t, "[wip]", pr.GetWorkInProgressPrefix(t.Context()))
 }
 
-func TestDeleteOrphanedObjects(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
-
+func testDeleteOrphanedObjects(t *testing.T) {
 	countBefore, err := db.GetEngine(t.Context()).Count(&issues_model.PullRequest{})
 	assert.NoError(t, err)
 
@@ -317,7 +328,7 @@ func TestDeleteOrphanedObjects(t *testing.T) {
 	assert.Equal(t, countBefore, countAfter)
 }
 
-func TestParseCodeOwnersLine(t *testing.T) {
+func testParseCodeOwnersLine(t *testing.T) {
 	type CodeOwnerTest struct {
 		Line   string
 		Tokens []string
@@ -325,22 +336,69 @@ func TestParseCodeOwnersLine(t *testing.T) {
 
 	given := []CodeOwnerTest{
 		{Line: "", Tokens: nil},
-		{Line: "# comment", Tokens: []string{}},
+		{Line: "# comment", Tokens: nil},
 		{Line: "!.* @user1 @org1/team1", Tokens: []string{"!.*", "@user1", "@org1/team1"}},
 		{Line: `.*\\.js @user2 #comment`, Tokens: []string{`.*\.js`, "@user2"}},
 		{Line: `docs/(aws|google|azure)/[^/]*\\.(md|txt) @org3 @org2/team2`, Tokens: []string{`docs/(aws|google|azure)/[^/]*\.(md|txt)`, "@org3", "@org2/team2"}},
 		{Line: `\#path @org3`, Tokens: []string{`#path`, "@org3"}},
 		{Line: `path\ with\ spaces/ @org3`, Tokens: []string{`path with spaces/`, "@org3"}},
+		{Line: `/docs/.*\\.md @user1`, Tokens: []string{`/docs/.*\.md`, "@user1"}},
+		{Line: `!/assets/.*\\.(bin|exe|msi) @user1`, Tokens: []string{`!/assets/.*\.(bin|exe|msi)`, "@user1"}},
 	}
 
 	for _, g := range given {
 		tokens := issues_model.TokenizeCodeOwnersLine(g.Line)
-		assert.Equal(t, g.Tokens, tokens, "Codeowners tokenizer failed")
+		assert.Equal(t, g.Tokens, tokens, "Codeowners tokenizer failed: input=%s", g.Line)
 	}
 }
 
-func TestGetApprovers(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testCodeOwnerAbsolutePathPatterns(t *testing.T) {
+	type testCase struct {
+		content  string
+		file     string
+		expected bool
+	}
+
+	cases := []testCase{
+		// Absolute path pattern should match (leading "/" stripped)
+		{content: "/README.md @user5\n", file: "README.md", expected: true},
+		// Absolute path pattern in subdirectory
+		{content: "/docs/.* @user5\n", file: "docs/foo.md", expected: true},
+		// Absolute path should not match nested paths it shouldn't
+		{content: "/docs/.* @user5\n", file: "other/docs/foo.md", expected: false},
+		// Relative path still works
+		{content: "README.md @user5\n", file: "README.md", expected: true},
+		// Negated absolute path pattern
+		{content: "!/.* @user5\n", file: "README.md", expected: false},
+	}
+
+	for _, c := range cases {
+		rules, _ := issues_model.GetCodeOwnersFromContent(t.Context(), c.content)
+		require.NotEmpty(t, rules)
+		rule := rules[0]
+		regexpMatched, _ := rule.Rule.MatchString(c.file)
+		ruleMatched := regexpMatched == !rule.Negative
+		assert.Equal(t, c.expected, ruleMatched, "pattern %q against file %q", c.content, c.file)
+	}
+}
+
+// testCodeOwnerPatternMatchTimeout ensures user-supplied CODEOWNERS patterns
+// cannot stall pull request processing through catastrophic regex backtracking:
+// each compiled rule must enforce a bounded match time.
+func testCodeOwnerPatternMatchTimeout(t *testing.T) {
+	rules, _ := issues_model.GetCodeOwnersFromContent(t.Context(), "(a+)+ @user5\n")
+	require.Len(t, rules, 1)
+
+	maliciousInput := strings.Repeat("a", 30) + "X"
+	start := time.Now()
+	_, err := rules[0].Rule.MatchString(maliciousInput)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "expected MatchTimeout error on pathological input")
+	assert.Less(t, elapsed, time.Second, "match timeout did not bound regex evaluation; took %s", elapsed)
+}
+
+func testGetApprovers(t *testing.T) {
 	pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 5})
 	// Official reviews are already deduplicated. Allow unofficial reviews
 	// to assert that there are no duplicated approvers.
@@ -348,10 +406,13 @@ func TestGetApprovers(t *testing.T) {
 	approvers := pr.GetApprovers(t.Context())
 	expected := "Reviewed-by: User Five <user5@example.com>\nReviewed-by: Org Six <org6@example.com>\n"
 	assert.Equal(t, expected, approvers)
+
+	defer test.MockVariableValue(&setting.Repository.PullRequest.DefaultMergeMessageMaxApprovers, 1)()
+	approvers = pr.GetApprovers(t.Context())
+	assert.Equal(t, "Reviewed-by: User Five <user5@example.com>\n", approvers)
 }
 
-func TestGetPullRequestByMergedCommit(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testGetPullRequestByMergedCommit(t *testing.T) {
 	pr, err := issues_model.GetPullRequestByMergedCommit(t.Context(), 1, "1a8823cd1a9549fde083f992f6b9b87a7ab74fb3")
 	assert.NoError(t, err)
 	assert.EqualValues(t, 1, pr.ID)
@@ -362,8 +423,7 @@ func TestGetPullRequestByMergedCommit(t *testing.T) {
 	assert.ErrorAs(t, err, &issues_model.ErrPullRequestNotExist{})
 }
 
-func TestMigrate_InsertPullRequests(t *testing.T) {
-	assert.NoError(t, unittest.PrepareTestDatabase())
+func testMigrateInsertPullRequests(t *testing.T) {
 	reponame := "repo1"
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{Name: reponame})
 	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
@@ -388,4 +448,50 @@ func TestMigrate_InsertPullRequests(t *testing.T) {
 	_ = unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{IssueID: i.ID})
 
 	unittest.CheckConsistencyFor(t, &issues_model.Issue{}, &issues_model.PullRequest{})
+}
+
+func testCodeOwnerSectionsAndAnnotations(t *testing.T) {
+	rules, warnings := issues_model.GetCodeOwnersFromContent(t.Context(), "*.js @user5\n[Docs] @user1\n*.md\n")
+	require.Empty(t, warnings)
+	require.Len(t, rules, 2)
+	for _, rule := range rules {
+		assert.False(t, rule.ReviewRequest.Has())
+	}
+
+	rules, warnings = issues_model.GetCodeOwnersFromContent(t.Context(), `## review-request=false # global
+*.js @user5 ## review-request=true # line
+[Documentation] @user1 ## review-request=true # section
+*.md
+/docs/* @user5 ## review-request=false
+[Other Section] @user5
+*.txt
+`)
+	match := func(rule *issues_model.CodeOwnerRule, path string) bool {
+		v, _ := rule.Rule.MatchString(path)
+		return v
+	}
+	require.Empty(t, warnings)
+	require.Len(t, rules, 4)
+	assert.True(t, rules[0].ReviewRequest.Value())
+	assert.True(t, match(rules[0], "src/app.js"))
+	assert.False(t, match(rules[0], "appXjs"))
+	assert.Equal(t, "Documentation", rules[1].Section)
+	assert.Equal(t, "user1", rules[1].Users[0].Name)
+	assert.True(t, rules[1].ReviewRequest.Value())
+	assert.Equal(t, "user5", rules[2].Users[0].Name)
+	assert.False(t, rules[2].ReviewRequest.Value())
+	assert.True(t, match(rules[2], "docs/guide.md"))
+	assert.False(t, match(rules[2], "other/docs/guide.md"))
+	assert.False(t, rules[3].ReviewRequest.Value())
+
+	rules, warnings = issues_model.GetCodeOwnersFromContent(t.Context(), "*.js @user5 ## review-request=invalid\n*[ @user5\n")
+	require.Len(t, rules, 1)
+	assert.False(t, rules[0].ReviewRequest.Has())
+	require.Len(t, warnings, 2)
+
+	rules, warnings = issues_model.GetCodeOwnersFromContent(t.Context(), `file\#name @user5 ## review-request=false`)
+	require.Empty(t, warnings)
+	require.Len(t, rules, 1)
+	assert.True(t, match(rules[0], "file#name"))
+	assert.False(t, rules[0].ReviewRequest.Value())
 }
